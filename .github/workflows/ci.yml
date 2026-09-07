@@ -66,6 +66,7 @@ jobs:
       # runner: CUPS/Print to PDF) falhasse no MESMO comando, o agente-core (handshake/bind, código de produção)
       # apareceria como SKIPPED nesse SO. Aqui os unitários de TODOS os módulos rodam sempre; a impressão real é à parte.
       - name: Testes unitários (todos os módulos, sem impressora)
+        id: unitarios
         shell: bash
         run: ./mvnw -B -ntp test -Djava.awt.headless=true
 
@@ -77,8 +78,10 @@ jobs:
             "-Dimpressora.virtual=${IMPRESSORA_VIRTUAL}" "-Dimpressao.saida=${IMPRESSAO_SAIDA}"
 
       # ── Empacotamento: o MESMO código dos testes vira o binário que a loja instala (jlink + jpackage) ─────────────
+      # Os passos abaixo dependem SÓ dos unitários: um vermelho na impressão virtual (ambiente do runner) não pode
+      # esconder o empacotamento — foi o que aconteceu no run 34127331719 (Windows: empacotar SKIPPED).
       - name: WiX 3 (Windows — exigido pelo jpackage para .exe)
-        if: runner.os == 'Windows'
+        if: always() && runner.os == 'Windows' && steps.unitarios.outcome == 'success'
         shell: pwsh
         run: |
           if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue) -and -not $env:WIX) {
@@ -87,6 +90,8 @@ jobs:
           } else { Write-Host "WiX presente: $env:WIX" }
 
       - name: Empacotar (jlink runtime enxuto + jpackage app-image + instalador do SO)
+        id: empacotar
+        if: always() && steps.unitarios.outcome == 'success'
         shell: bash
         run: ./mvnw -B -ntp -pl agente-app -am -DskipTests -Pempacotar package
 
@@ -94,6 +99,7 @@ jobs:
       # javax.print = java.desktop) e impressão REAL na impressora virtual onde houver. Usa o launcher -cli (Windows: o
       # launcher principal é GUI, sem stdout).
       - name: Smoke do binário empacotado
+        if: always() && steps.empacotar.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -112,8 +118,13 @@ jobs:
             if [ "$RUNNER_OS" = "Windows" ]; then
               rm -f "$IMPRESSAO_SAIDA"
               "$BIN" --imprimir-teste "$IMPRESSORA_VIRTUAL" agente-app/target/teste-smoke.pdf
-              for i in $(seq 1 60); do [ -s "$IMPRESSAO_SAIDA" ] && break; sleep 1; done
-              [ -s "$IMPRESSAO_SAIDA" ] || { echo "PDF não saiu em $IMPRESSAO_SAIDA"; exit 1; }
+              # o spooler cria o arquivo vazio e vai escrevendo: esperar não vazio E tamanho estável por 2 s
+              ANT=-1; for i in $(seq 1 60); do
+                T=$(stat -c %s "$IMPRESSAO_SAIDA" 2>/dev/null || echo 0)
+                if [ "$T" -gt 0 ] && [ "$T" = "$ANT" ]; then break; fi
+                ANT=$T; sleep 2
+              done
+              [ "$(stat -c %s "$IMPRESSAO_SAIDA" 2>/dev/null || echo 0)" -gt 0 ] || { echo "PDF não saiu em $IMPRESSAO_SAIDA"; exit 1; }
               ls -la "$IMPRESSAO_SAIDA"
             else
               ANTES=$(ls "$IMPRESSAO_SAIDA" | wc -l)
