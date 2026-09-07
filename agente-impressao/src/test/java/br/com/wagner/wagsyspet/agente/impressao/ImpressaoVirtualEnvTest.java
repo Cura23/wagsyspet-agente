@@ -87,19 +87,33 @@ class ImpressaoVirtualEnvTest {
         System.out.println("[IMPRESSAO] saída: " + gerado.get() + " (" + Files.size(gerado.get()) + " bytes)");
     }
 
-    /** Diretório (cups-pdf: arquivo novo com o prefixo do job) ou arquivo (porta de arquivo do Windows). */
+    /**
+     * Diretório (cups-pdf: arquivo novo com o prefixo do job) ou arquivo (porta de arquivo do Windows).
+     * O spooler cria o arquivo VAZIO e vai escrevendo (Windows: mtime nova com 0 bytes por alguns instantes — foi o
+     * falso vermelho do CI 34127331719): só devolve quando o arquivo está não vazio e o tamanho ficou estável.
+     */
     private Optional<Path> esperarSaida(String prefixoJob, Instant depoisDe) throws Exception {
         Instant limite = Instant.now().plus(ESPERA_SPOOLER);
         while (Instant.now().isBefore(limite)) {
             Optional<Path> achado = Files.isDirectory(saida)
                     ? novoNoDiretorio(prefixoJob, depoisDe)
                     : arquivoAtualizado(saida, depoisDe);
-            if (achado.isPresent()) {
+            if (achado.isPresent() && escritaConcluida(achado.get())) {
                 return achado;
             }
             Thread.sleep(300);
         }
         return Optional.empty();
+    }
+
+    /** Não vazio e com o mesmo tamanho em duas leituras separadas por 500 ms. */
+    private static boolean escritaConcluida(Path p) throws Exception {
+        long t1 = Files.size(p);
+        if (t1 <= 0) {
+            return false;
+        }
+        Thread.sleep(500);
+        return Files.exists(p) && Files.size(p) == t1;
     }
 
     private static Optional<Path> novoNoDiretorio(String prefixo, Instant depoisDe) throws IOException {

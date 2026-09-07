@@ -2,8 +2,33 @@
 
 > **Status (2026-09-07):** PLANO APROVADO (todas as decisões tomadas — Java 21, repo público, multiplataforma).
 > **F0 em andamento:** spike de fidelidade **PASSOU** (iText ≈ Chrome, fiscal com QR e não-fiscal); spike do caminho
-> Unix **PASSOU em código** (`javax.print` enumera; `lp` + PDF nativo → CUPS → `cups-pdf`, 6/6 verdes). Projeto
-> semeado em `wagsyspet-agente/` (Maven, `agente-impressao`). **Este arquivo é o plano canônico — vive no repo do agente.**
+> Unix **PASSOU em código** (`javax.print` enumera; `lp` + PDF nativo → CUPS → `cups-pdf`, 6/6 verdes).
+> **Windows PROVADO no CI** (runner `windows-latest`: `PrinterJob`+PDFBox → "Microsoft Print to PDF" em porta de
+> arquivo → PDF com `Producer: Microsoft: Print To PDF`, 4/4 rodaram). CI verde em **ubuntu/windows/macos**.
+> **WebSocket em 127.0.0.1 PASSOU** (`agente-core`: `ServidorAgente` + `PorteiroHandshake`, 34/34 verdes com sockets
+> reais; curl: Origin do PWA → 101, Origin estranha/sem Origin/Host rebinding → recusa antes do upgrade, LAN não
+> conecta). **Adversarial F0 do `agente-core` (17 agentes) → 9 confirmados, todos tratados** (ver §7.1): teto de frame
+> 4 MB (a lib pré-alocava o tamanho DECLARADO — 14 bytes derrubavam o agente por OOM), frame binário → erro tipado,
+> `onStart` protegido + timeout derruba, sinal `falhaFatal()` + `estaEscutando()` + watchdog no host, teste de
+> socket pro Host, recusas assertadas pelo 404 real, CI em 2 passos. ⚠️ Java-WebSocket 1.6 responde **404**
+> (hardcoded) em toda recusa de handshake, não 403 — cosmético, o 101 nunca sai. **Item (d) LNA FEITO, automatizado**
+> (Chrome 152 dirigido por CDP na tela do dono + Firefox 140 ESR por BiDi; resultados e PNGs em `docs/roteiro-spike-lna.md`
+> e `docs/lna/`): prompt pt-BR = **"wagsyspet-frontend.vercel.app quer · Acessar outros apps e serviços neste dispositivo ·
+> Bloquear/Permitir"**; ⚠️ **127.0.0.1 é permissão SEPARADA da "Rede local"**: content setting `loopback_network`, rótulo
+> **"Apps no dispositivo"**, Permissions API **`loopback-network`** (Firefox 140 lança TypeError → feature-detect); prompt
+> aparece **sem gesto**; após "Bloquear" **nenhum indicador** na barra de endereço, console `net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS`;
+> reativar em *Configurações do site → Apps no dispositivo → Permitir* vale **na hora** sem recarregar; example.com com
+> permissão concedida é recusado pelo agente (404); dev `localhost:5173` sem prompt. Não coberto: 3 dispensas/embargo, Edge,
+> Windows/macOS. **Item (e) Ed25519 FEITO** (`agente-protocolo`: `TicketClaims`/`ChavesTicket`/`AssinadorTicket`/
+> `VerificadorTicket`, formato `v1.b64url(json).b64url(sig)`, 38 testes + **37 vetores de teste** em
+> `vetores-ticket-v1.json` que o backend copia na F1; **adversarial 12 agentes → 5 confirmados, todos corrigidos**, ver
+> §7.2: teto de validade 1 h, fail-fast em chave inválida, parser estrito, assinatura canônica, gerador com chave estável).
+> **Item (f) empacotamento FEITO no Linux**
+> (`agente-app` + perfil Maven `-Pempacotar`: jlink 59 MB → app-image 67 MB → `.deb` 38 MB; binário roda `--diagnostico`
+> com Ed25519 + javax.print e imprime no cups-pdf; prova negativa: runtime sem `jdk.crypto.ec` falha com saída 2). CI ganhou
+> os passos de empacotar + smoke nos 3 SOs — **Windows/macOS só provam após o push**. Repo público:
+> https://github.com/Cura23/wagsyspet-agente · fachada `Impressora` por SO (TDD).
+> **Este arquivo é o plano canônico — vive no repo do agente.**
 > Gerado em 2026-09-06 a partir de recon multi-agente (6 lentes + 4 contra-provas céticas, fontes primárias
 > de 2026) + verificação pessoal dos achados decisivos. Pré-requisito já feito: **Fase 0** (rate-limit fiscal,
 > código morto, robustez do `imprimirViaIframe`) — commitada e pushada nas branches `worktree-fase0-impressao`
@@ -44,9 +69,11 @@ Custo monetário alvo: **R$0** (GitHub Releases; libs Apache/MIT; sem licença; 
 | Instalar software por loja é aceitável | Dono prefere download+instala a configurar atalho do Chrome |
 | **Não assinar** o executável | Custo R$0; aceita o aviso "editor desconhecido" (ver §2.6 para os limites reais) |
 | Download **de dentro do sistema** | Botão no app; bytes em storage grátis; Railway nunca proxia (heap 384 MB) |
+| **Download em DOIS lugares: botão no painel (logado) + link PÚBLICO estável; o que exige login é o PAREAMENTO** (Wagner, 2026-09-07) | O instalador já é público (GitHub Releases, repo público) — login no download não protege nada, só define onde fica o botão. Com N caixas por loja, quem instala costuma ser técnico/funcionário sem a senha do dono: ele baixa por `app.agroease.com.br/agente` (página pública com instruções por SO) ou por `GET /api/public/agente-impressao/download/{so}` (302 pro asset). O agente **não faz nada** sem o código de pareamento, que só o dono logado com permissão de configuração gera |
 | Manter DIALOGO/DIRETO intactos | AGENTE é aditivo; fallback sempre existe |
 | Reusar o **HTML** existente (fiscal da Focus + builders próprios) | Não duplicar a verdade fiscal; não reescrever layout homologado |
 | **Stack Java 21** (um motor `javax.print` p/ todos os SOs), repo **próprio e público** | Linguagem do dono; código compartilhado c/ backend; GitHub Releases grátis; sem segredo no binário |
+| **Marca para a loja = AgroEase; código/repo/pacotes = wagsyspet** (Wagner, 2026-09-07) | O produto foi renomeado de WagSysPet para AgroEase (site `app.agroease.com.br`); o código manteve `wagsyspet` e **isso é aceito**. Regra: **tudo que a loja vê** diz *AgroEase* — nome do instalador (`AgroEase-Agente-Impressao-{versao}-{so}-{arch}.{ext}`, não `wagsyspet-agente-…`), título de janela/bandeja ("Agente de Impressão AgroEase"), textos do painel, e-mails, logs mostrados ao usuário; o prompt do navegador mostra a **Origin**, então em produção lê "**app.agroease.com.br quer**" (a URL `wagsyspet-frontend.vercel.app` é de teste). Nomes de repo, pacote Java, classes e URLs de release podem ficar `wagsyspet` |
 | **Todos os SOs desde o dia 1** (Windows+Linux validados; macOS beta) | Princípio do dono: "deixar certo para todos"; sem Mac para validar |
 | **Qualquer impressora** | Zero código por fabricante; tudo via driver do SO |
 | **Qualquer quantidade de caixas por loja** | Tabela tenant por máquina; impressora por máquina |
@@ -80,12 +107,18 @@ Custo monetário alvo: **R$0** (GitHub Releases; libs Apache/MIT; sem licença; 
   - **1 prompt por origem do PWA, persistente.** "Bloquear" trava até reset manual; **3 dispensas ≈ embargo de
     7 dias**. Logo: a 1ª conexão **sempre por gesto** (botão "Conectar agente"), **nunca** reconectar em loop no
     load do PDV.
-  - Antes de conectar: `navigator.permissions.query({name:'local-network-access'})` em try/catch (devolve
-    `prompt` mesmo sem LNA; `denied` em página HTTP). Pré-disparar o prompt com `fetch('http://127.0.0.1:PORTA')`
-    (Edge 144+).
-  - Guia de reativação no painel (textos em inglês nas fontes — **capturar o pt-BR em teste manual**):
-    Chrome 145+ "Apps on device" (≤144 "Local network access"); Edge: Settings → Privacy → Site permissions →
-    "Local network access"; Firefox: permissão "Local Network Devices".
+  - Antes de conectar (**verificado no Chrome 152, 2026-09-07**): `navigator.permissions.query({name:'loopback-network'})`
+    — é ESSA a permissão de `127.0.0.1` (content setting `loopback_network`, rótulo "Apps no dispositivo"), separada da
+    "Rede local" (`local-network-access`, que ficou em `prompt` sem mudar). Consultar `loopback-network` primeiro, cair
+    para `local-network-access`, e **try/catch obrigatório**: Firefox 140 lança `TypeError` para os dois nomes. Estados
+    vistos: `prompt` → (clique) → `granted` | `denied` após Bloquear. O prompt aparece **sem gesto** (testado), mas a
+    1ª conexão continua por botão, por UX e pelo embargo das dispensas.
+  - Guia de reativação no painel — **textos pt-BR CAPTURADOS** (`docs/roteiro-spike-lna.md`, `docs/lna/*.png`):
+    prompt = "*wagsyspet-frontend.vercel.app* quer · Acessar outros apps e serviços neste dispositivo · Bloquear / Permitir";
+    reativar = ícone à esquerda da URL → *Configurações do site* → **"Apps no dispositivo"** → *Permitir* (vale na hora,
+    sem recarregar). Depois de "Bloquear" o Chrome **não mostra indicador nenhum** na barra de endereço e o console diz
+    `net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS` — o PWA mapeia `close 1006` + `denied` → guia. Edge (não instalado
+    aqui) e Firefox ≥154 ("Dispositivos da rede local"?) ainda em inglês nas fontes — conferir na loja-piloto.
 - **Safari/macOS/iPad: fora do MVP.** WebKit ainda bloqueia `ws://` loopback (bug 171934 aberto); iPad não roda o
   agente. Ficam em DIALOGO. Contingência (fase M, só se houver demanda): CA raiz **por máquina** gerada no install
   + `wss://`, com **folha ≤825 dias** (Apple rejeita mais que isso mesmo de root do usuário) e renovação ~2 anos.
@@ -235,12 +268,24 @@ impressoras cadastradas no agente, log local por job (origin, jti, impressora, t
 ### 2.5 Distribuição, versão e auto-update
 
 - **DECIDIDO (repo do agente PÚBLICO — Wagner, 2026-09-06):** o armazém é o **GitHub Releases** — banda ilimitada e
-  grátis, URL estável `https://github.com/<org>/wagsyspet-agente/releases/download/v{versao}/wagsyspet-agente-{versao}-{so}-{arch}.{ext}`
+  grátis, URL estável `https://github.com/<org>/wagsyspet-agente/releases/download/v{versao}/AgroEase-Agente-Impressao-{versao}-{so}-{arch}.{ext}`
+  (**nome do arquivo = marca AgroEase**, é o que o lojista vê na pasta Downloads; o caminho do repo pode ficar `wagsyspet-agente`)
   + `latest.json` como asset da release. **R2, `S3Presigner`, AWS SDK e credencial no Railway SAEM do plano.**
-- **Entrega:** `GET /api/agente-impressao/release` (autenticado, bucket geral) devolve JSON `{versaoAtual, versaoMinima,
-  urls por SO/arch, sha256, tamanho}` lido das propriedades `app.agente-impressao.*` (env) — o front faz
-  `window.open(url)`. (O JWT vai em header Bearer → um `302` direto não serviria em `<a href>`; JSON resolve.) O lojista
-  clica no botão **dentro do sistema**; onde o arquivo mora é invisível pra ele.
+- **Entrega (DECIDIDO 2026-09-07 — dois lugares, PÚBLICA):** o download **não exige login**; o que exige é o pareamento.
+  - `GET /api/public/agente-impressao/release` (**permitAll** em `SecurityConfig`, prefixo `/api/public/**` que já existe;
+    bucket geral por IP; sem tenant) devolve JSON `{versaoAtual, versaoMinima, urls por SO/arch, sha256, tamanho}` lido de
+    `app.agente-impressao.*` (env). É o mesmo JSON que o painel logado usa — **um só endpoint**, sem duplicar.
+  - `GET /api/public/agente-impressao/download/{so}` (`windows | linux | macos-arm64 | macos-x64`) → **302** pro asset do
+    GitHub Releases (`Cache-Control: no-store`; 404 tipado se o SO não existir). Serve pra `<a href>` e pra suporte
+    mandar um link estável por WhatsApp.
+  - **Página pública do front `app.agroease.com.br/agente`** (rota fora do login, molde `/extrato/crediario/:token`):
+    detecta o SO pelo `navigator.userAgentData`/UA, botão "Baixar para Windows/Linux/macOS", sha256 visível, e as
+    instruções por SO da §2.7 (SmartScreen/"Manter mesmo assim", macOS "Abrir mesmo assim", Linux `.deb`). Rodapé:
+    "Depois de instalar, peça ao responsável da loja o **código de pareamento** em Configurações → Impressão".
+  - **Painel logado** (`AgenteImpressaoPanel`) mantém o botão "Baixar agente" (chama o mesmo endpoint público) **ao lado
+    de "Gerar código de pareamento"** — é o fluxo do dono; o técnico usa a página pública.
+  - Por que é seguro ser público: o binário já é público no GitHub; **nenhum segredo no binário**; sem código de
+    pareamento (só dono logado + `admin:configuracoes`, 1 uso, 15 min) o agente não fala com loja nenhuma.
 - Repo público é seguro: **nenhum segredo no binário** — a única chave embutida é a **pública** de verificação.
 - **Versão (auto-update MVP, sem troca de binário):** `hello {versao, protocolo, so, arch}`; backend expõe
   `app.agente-impressao.{versao-atual, versao-minima, protocolo-minimo}` por **env** (molde
@@ -316,7 +361,8 @@ CI → deploy). Os instaladores vão para o GitHub Releases pelo CI do repo do a
 | `service/ConfiguracaoGeralService.java:176-182` | `impressoraSelecionada`: não-null→trim, **isBlank→null** (hoje "null preserva" impede limpar); guard `AGENTE` sem `agentePareado` → `BusinessException` (molde F-08 l.152-169); `toDTO` seta `agentePareado` |
 | `service/ConfiguracaoGeralService.java` (novos) | `@Transactional marcarAgentePareado(versao)` (dentro de `runWithTenant`), `desparear()`, `@Transactional(readOnly) buscarImpressao()` → DTO leve **sem LAZY** (OSIV off) |
 | `controller/ConfiguracaoGeralController.java:77` | **`GET /impressao` com `isAuthenticated()`** (ver §7 — corrige bug pré-existente) → `{modoImpressao, impressoraSelecionada, agentePareado}`; `DELETE /agente-impressao` (RBAC igual l.37) |
-| `controller/AgenteImpressaoController.java` (NOVO, `/api/agente-impressao`) | `GET /release`, `GET /versao`, `GET /ticket` (`isAuthenticated()`), `POST /pareamento/token` (RBAC de config). Bucket geral do rate-limit (prefixo não é fiscal) |
+| `controller/AgenteImpressaoController.java` (NOVO, `/api/agente-impressao`) | `GET /versao`, `GET /ticket` (`isAuthenticated()`), `POST /pareamento/token` (RBAC de config). Bucket geral do rate-limit (prefixo não é fiscal) |
+| `controller/AgenteImpressaoPublicController.java` (NOVO, `/api/public/agente-impressao`) + `SecurityConfig` (`permitAll` na linha dos outros `/api/public/**`) | `GET /release` (JSON versão/URLs/sha256 — **sem login**, é o que o painel E a página pública consomem) e `GET /download/{so}` (**302** pro asset do GitHub Releases, `no-store`, 404 tipado `AGENTE_SO_DESCONHECIDO`). Sem tenant (o `TenantFilter` já marca `public`). Teste: `BaseSecurityTest` prova 200/302 **sem JWT** e que `/api/agente-impressao/ticket` continua 401 sem JWT |
 | `controller/AgenteImpressaoPublicController.java` (NOVO, `/api/public/agente-impressao`) | `POST /parear`; erro sempre **404 genérico** + `no-store` (molde `PortalContadorPublicController:22-25`); **não ler `X-Tenant-ID`** |
 | `service/impressao/AgenteImpressaoService.java` (NOVO) | `emitirToken()` / `parear()` (CAS + `runWithTenant`) / `emitirTicket()`; `AgenteTicketService` Ed25519 JDK 21 |
 | `model/AgenteImpressaoToken.java` + `repository/…` (NOVOS) | `@Table(schema="public")`, **sem `BaseEntity`** (o listener sobrescreveria `tenant_id` — molde `PortalContadorToken:7-15`); `findByTokenHash`, `@Modifying consumir(...)`, `revogarPendentesDoTenant` |
@@ -345,7 +391,8 @@ CI → deploy). Os instaladores vão para o GitHub Releases pelo CI do repo do a
 | `hooks/useConfiguracaoGeral.ts:51-54, 87-90` | `agentePareado?: boolean` (read-only); enviar `''` para limpar impressora |
 | **NOVO** `hooks/useAgenteImpressao.ts` (+ test) | React Query: `useAgenteStatus` (retry:false, staleTime 15 s, refetch 30 s **não** em background), `useAgenteImpressoras`, `useReleaseAgente`, `useGerarCodigoPareamento`, `useImprimirTesteAgente`; invalidar `['configuracao-geral']` ao parear |
 | `pages/ConfiguracaoGeral.tsx:470-508` | Habilitar rádio AGENTE (tirar `disabled`/"em breve"); renderizar `<AgenteImpressaoPanel/>` |
-| **NOVO** `components/configuracao/AgenteImpressaoPanel.tsx` (+ test) | Status (não detectado / vX não pareado / pareado / desatualizado); "Baixar agente" + instruções **por SO** (Edge/SmartScreen/SAC/macOS); "Gerar código de pareamento" (1×, expira 15 min); **"Conectar agente" (gesto → LNA)** + estado da permissão + guia de reativação; `<select>` impressoras + "Atualizar" + "Imprimir teste" (mostra o estado devolvido); "Desparear"; aviso Safari/iPad não suportado |
+| **NOVO** `pages/AgenteImpressaoDownload.tsx` (+ test) — rota **pública** `/agente` no `App.tsx`, fora do login, ao lado de `/extrato/crediario/:token` | Página que a loja/técnico abre sem senha (`app.agroease.com.br/agente`): detecta o SO, "Baixar para Windows/Linux/macOS" via `GET /api/public/agente-impressao/release`, sha256, instruções por SO (§2.7), aviso "peça o código de pareamento ao responsável da loja". **Marca AgroEase em todo texto** |
+| **NOVO** `components/configuracao/AgenteImpressaoPanel.tsx` (+ test) | Status (não detectado / vX não pareado / pareado / desatualizado); "Baixar agente" (mesmo endpoint público) + link "página de instalação" (`/agente`) + instruções **por SO** (Edge/SmartScreen/SAC/macOS); "Gerar código de pareamento" (1×, expira 15 min); **"Conectar agente" (gesto → LNA)** + estado da permissão + guia de reativação; `<select>` impressoras + "Atualizar" + "Imprimir teste" (mostra o estado devolvido); "Desparear"; aviso Safari/iPad não suportado |
 | `services/impressao/imprimirViaIframe.ts` | **Sem mudança** (o caminho AGENTE usa PDF, não reusa o CSS do iframe) |
 | `vite.config.ts` | **Nenhuma** regra nova (WebSocket não passa pelo Service Worker) |
 
@@ -368,7 +415,7 @@ backend), `agente-core` (servidor Java-WebSocket em 127.0.0.1, Origin/Host/ticke
 | **F1** | **Backend mínimo** | P/M | Tudo de §3-Backend: `agentePareado` read-only, limpar impressora, guard AGENTE, **`GET /impressao` leve**, `AgenteImpressaoController` (+ público `parear`), tabela public `agente_impressao_token`, ticket Ed25519, props, ErrorCodes, rate-limit/SecurityConfig | Testes de integração verdes incl. **adversarial `X-Tenant-ID`**; `validar-baseline.sh` ok; adversarial workflow aprovado |
 | **F2** | **Frontend** | M | Tudo de §3-Frontend: contrato `ResultadoImpressao`, `agenteClient/estrategiaAgente/mensagens`, hooks, `AgenteImpressaoPanel`, call-sites com toast real + ação fallback, hook `/impressao` no PDV, rádio AGENTE habilitado | `tsc -b` limpo; `lint:ci ≤131`; vitest verde (novos testes com FakeSocket); adversarial aprovado; **sem agente ainda funciona igual a hoje** |
 | **F3** | **Agente Java multiplataforma MVP** | G | Repo novo (§2.3): `agente-protocolo` (compartilhável c/ backend), `agente-core` (Java-WebSocket 127.0.0.1, 3 barreiras, `hello/auth/listar/imprimir/ping`, fila 1 job, pareamento, versão), `agente-impressao` (`javax.print` + PDFBox: lista por nome, PDF 80 mm, "papel do driver" default / `Paper` opt-in, `PrintJobListener` → estado), `agente-app` (`SystemTray`, autostart HKCU Run/LaunchAgent/systemd, credencial AES-GCM 0600, `--instalar/--desinstalar`). CI: jlink + jpackage nos 3 runners → `.exe` per-user, `.dmg` ad-hoc, `.deb`/tar + sha256 + `latest.json` assinado | **Um só código** imprimindo nos 3 SOs. **Linux:** validado na **máquina do dono** (`cups-pdf`; térmica real quando houver). **Windows:** validado em VM/PC ("Print to PDF") + **checkpoint em térmica real na loja-piloto** (≥3 marcas: `ACEITO_SPOOLER`, papel/corte). **macOS:** construído e assinado ad-hoc, sai **BETA** (o dono não tem Mac). Ticket inválido/Origin/Host errados **recusados** (JUnit). Adversarial aprovado |
-| **F4** | **Distribuição + endurecimento** | M | `/release` devolvendo as URLs do **GitHub Releases** (props/env) + sha256; página de instruções permanente **por SO** (Edge/SmartScreen/SAC/Defender; macOS "Abrir Mesmo Assim"; Linux `.deb`) ; submissão ao Defender por release; **versão mínima bloqueante** no PWA; painel de **caixas pareados** (listar/revogar por máquina — a tabela `agente_impressao` já vem da F1) | Instalação do zero numa máquina limpa Win10, Win11 e Linux seguindo só a página; bloqueio por versão testado; revogar um caixa corta os tickets dele |
+| **F4** | **Distribuição + endurecimento** | M | `GET /api/public/agente-impressao/release` + `/download/{so}` (**públicos**, `permitAll`) devolvendo as URLs do **GitHub Releases** (props/env) + sha256; **página pública `app.agroease.com.br/agente`** (rota fora do login) com detecção de SO, botões de download, sha256 e instruções permanentes **por SO** (Edge/SmartScreen/SAC/Defender; macOS "Abrir Mesmo Assim"; Linux `.deb`) + aviso "peça o código de pareamento ao responsável"; o painel logado reusa o mesmo endpoint; submissão ao Defender por release; **versão mínima bloqueante** no PWA; painel de **caixas pareados** (listar/revogar por máquina — a tabela `agente_impressao` já vem da F1) | Instalação do zero numa máquina limpa Win10, Win11 e Linux seguindo só a página; bloqueio por versão testado; revogar um caixa corta os tickets dele |
 | **F5** | **Validações remanescentes + Safari** | M | **macOS em hardware real** (sai do beta); **contingência CA por máquina + `wss://` (folha ≤825 d)** só se houver loja em **Safari**; **plano B de fidelidade** (Chrome/Edge headless → PDF) só se o spike do F0 mostrar que o iText não basta. Windows 7/8.1 **fora** (JDK 21 exige Win10+) — documentar | Mac instala e imprime validado; Safari (se houver) conecta sem aviso |
 | **F6** | **Self-update + extras** | G | Self-update rename-swap verificando `latest.json` Ed25519 (chave de release separada); `PRINTED` via `GetJob/EnumJobs`; raw ESC/POS **não-fiscal** (gaveta/corte); ícone de bandeja | Update de vX→vY sem intervenção; rollback testado |
 | — | **Deferido (fora do plano)** | — | Cupom **não-fiscal offline** (venda offline não tem id; HTML só existe no backend — builder no front duplicaria a verdade); iPad/Safari via LAN | — |
@@ -424,6 +471,66 @@ paralelo depois do F0; F3 depende da stack decidida no F0.)
 cai em **DIALOGO em silêncio** — ou seja, o modo da loja (DIRETO hoje, AGENTE amanhã) **nunca chega ao caixa
 comum**. Correção (F1/F2): endpoint **leve** `GET /api/configuracoes/geral/impressao` com `isAuthenticated()`
 (sem expor contas financeiras/taxas) e trocar o hook nos 5 call-sites de impressão.
+
+### 7.1 Adversarial F0 do `agente-core` (2026-09-07, 17 agentes: 4 lentes + 1 cético por achado) — o que ficou pro F3
+
+Confirmados e **corrigidos no F0** (todos com teste RED→GREEN em `ServidorAgenteTest`): teto de frame 4 MB
+(`Draft_6455` explícito — o default aceitava 2 GB e **pré-alocava o tamanho declarado no header**: 14 bytes → OOM);
+frame binário → `TIPO_BINARIO_NAO_SUPORTADO`; `RuntimeException` no `onStart` (a lib só protege `IOException`) →
+`iniciar()` falha rápido e derruba; timeout do `iniciar()` derruba (sem órfão em thread não-daemon); `falhaFatal()`
+(a lib, num erro fatal pós-start, chama `stop(0)` na própria selector-thread = self-join eterno, processo vivo e
+mudo) + `estaEscutando()` (self-connect TCP; a lib **fecha o LISTEN em silêncio** num `EMFILE` no accept, `log.trace`,
+processo segue vivo) + watchdog de 30 s no `AgenteMain` que sai com código 3; teste de socket pro Host (rebinding e
+porta errada); recusas assertadas pelo **404 real** (não passam contra servidor morto); CI em 2 passos (unitários de
+todos os módulos sempre; impressão virtual à parte — o reator fail-fast escondia o `agente-core` como SKIPPED).
+
+**Herdado pro F3 (não corrigível no F0 ou é decisão de produto):**
+- **Bind falho vaza 1 fd** (`ServerSocketChannel` aberto antes do bind, nunca fechado; `stop()` não alcança; o ctor
+  com canal pré-bindado não aceita `drafts`). Regra: **nunca fazer retry em processo** criando instância nova (a
+  instância não é reiniciável); em porta ocupada o processo **sai ≠ 0** e o supervisor do SO (serviço Windows /
+  systemd / launchd) reinicia com backoff — é o mesmo caminho do watchdog.
+- **3ª barreira = ticket Ed25519 como 1ª mensagem**, com prazo curto pra recebê-lo (fechar 1008 se não vier em N s) e
+  `hello_ok` só depois do ticket. Hoje `hello/ping` respondem pré-auth (sem efeito; `so` já é público via UA).
+- **Teto de frame vale PRÉ-auth** (camada WS, antes do ticket) — já é assim; manter ao trocar de draft/lib.
+- **Recusa é 404, não 403** (hardcoded na lib) — só cosmético; não gastar tempo.
+- `estaEscutando()` faz conexão TCP crua: a lib **não** chama `onOpen/onClose` para conexão sem handshake (conn nunca
+  entra em `connections`) → sem ruído de log. Se um dia o log de handshake incompleto virar INFO, reavaliar.
+- Processo local hostil "se passando pelo agente" = fora do modelo de ameaça (já roda no caixa; lê tela/cookies).
+
+### 7.2 Adversarial F0 do ticket Ed25519 (`agente-protocolo`, 2026-09-07, 12 agentes: 3 lentes + céticos)
+
+**Verificado por fora e ficou de pé:** assinatura conferida com **OpenSSL 3.5** (`pkeyutl -verify -rawin`) e com oráculo Java
+standalone sem as classes do repo; `KeyFactory("Ed25519")` recusa SPKI de Ed448/X25519/RSA; assinatura de 63/65/114 bytes
+recusada; sem maleabilidade criptográfica (JDK rejeita S≥L); **fuzz de 85.800 entradas + 80.000 chamadas em 16 threads**
+→ zero exceção fora de `TicketInvalidoException`, replay concorrente aceito exatamente 1×; `Signature.getInstance` custa
+68 ns (verify ≈ 0,5 ms); purga do cache é O(n) mas n só cresce com tickets **válidos**; Jackson 2.19 já limita profundidade
+e tamanho de número.
+
+**Confirmados e corrigidos (RED→GREEN, 10 testes novos + 21 vetores novos = 37 no arquivo):**
+- **Sem teto de validade**: `exp` em milissegundos (bug de unidade no emissor) virava ticket de 58 mil anos, aceito, com
+  `jti` eterno no cache; `Long.MAX` só caía por overflow. Agora `exp − iat ≤ 1 h` **e** `exp − agora ≤ 1 h`, senão
+  `VALIDADE_ABSURDA`; comparações sem soma (sem overflow); `iat > 0` e `exp ≥ iat` obrigatórios.
+- **Chave pública inválida sem fail-fast**: o `KeyFactory` aceita SPKI Ed25519 com ponto fora da curva (metade dos 32
+  bytes aleatórios); só o `initVerify` descobre — no 1º ticket, com mensagem "falta jdk.crypto.ec". Agora
+  `ChavesTicket.exigirPublicaUtilizavel` roda no `importarPublica` e no construtor do verificador → `IllegalArgumentException`
+  clara na subida; o catch separa `InvalidKeyException` de `NoSuchAlgorithmException`.
+- **Parser leniente**: chave duplicada ("último vence") e lixo após o objeto passavam. Agora parser estrito
+  (`STRICT_DUPLICATE_DETECTION` + checagem de token após o objeto) → `FORMATO`; `agenteId`/`jti` casam
+  `[A-Za-z0-9_-]{1,64}` (nada de quebra de linha indo pro log).
+- **Assinatura sem forma canônica**: 32 strings distintas decodificavam pros mesmos 64 bytes (inofensivo pelo `jti`, mas
+  ambíguo). Agora exatamente 86 chars url-safe, senão `FORMATO`.
+- **Gerador de vetores trocava a chave a cada execução** (diff irrevisável). Agora reusa a chave do arquivo; regenerar
+  muda só o caso alterado (+ o do impostor). O JSON ganhou bloco `protocolo` com ordem das checagens, semântica de
+  `REPETIDO` (verificar 2×, verificador novo por caso), base64url sem padding, forma canônica, teto e tamanho máximo.
+
+**Herdado pro F3:**
+- **Cache de replay é só em memória**: reiniciar o agente reabre a janela do `jti` dentro do TTL (10 min). Aceito como
+  trade-off (ticket é de uso único por conexão e exige a chave do backend); se quiser fechar, persistir `jti→exp` no
+  diretório do agente e descartar vencidos no boot.
+- **Raiz de confiança**: o módulo confia na tripla (chave, lojaId, agenteId) que recebe. O F3 grava isso no arquivo de
+  pareamento com ACL do usuário (0600) + fingerprint SHA-256 da chave, valida `exigirPublicaUtilizavel` ao carregar e
+  prevê `kid` pra rotação. A chave do ticket assina **só tickets** (o `latest.json` do auto-update usa outro par).
+- No F3 o `onMessage` fecha a conexão (1008) no 1º ticket inválido e não verifica de novo — evita gastar 0,5 ms por lixo.
 
 ---
 

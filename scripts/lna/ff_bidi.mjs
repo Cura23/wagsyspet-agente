@@ -1,0 +1,26 @@
+const ORIGIN = process.argv[2] || 'https://wagsyspet-frontend.vercel.app';
+const ws = new WebSocket('ws://127.0.0.1:9222/session'); await new Promise((r, k) => { ws.onopen = r; ws.onerror = e => k(new Error('bidi ws')); });
+let seq = 0; const pend = new Map(); const eventos = [];
+ws.onmessage = ev => { const m = JSON.parse(ev.data); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } else eventos.push(m); };
+const send = (method, params = {}) => new Promise(r => { const id = ++seq; pend.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+const s = await send('session.new', { capabilities: {} });
+console.log('[ff] sessão:', s.result?.capabilities?.browserName, s.result?.capabilities?.browserVersion, s.result?.capabilities?.platformName);
+await send('session.subscribe', { events: ['log.entryAdded'] });
+const tree = await send('browsingContext.getTree');
+const ctx = tree.result.contexts[0].context;
+await send('browsingContext.navigate', { context: ctx, url: ORIGIN + '/', wait: 'complete' });
+await new Promise(r => setTimeout(r, 2500));
+const expr = `new Promise(res => { const ev=[]; const ini=performance.now(); const marca=(n,x={})=>ev.push({t:Math.round(performance.now()-ini),n,...x});
+  let ws; try { ws = new WebSocket('ws://127.0.0.1:28421'); } catch(e) { return res(JSON.stringify({throw:String(e)})); }
+  ws.onopen=()=>{marca('open'); ws.send(JSON.stringify({tipo:'hello'}));};
+  ws.onmessage=e=>{marca('message',{data:String(e.data).slice(0,200)}); ws.close(1000,'fim');};
+  ws.onerror=()=>marca('error'); ws.onclose=e=>{marca('close',{code:e.code,reason:e.reason}); res(JSON.stringify({ev}));};
+  setTimeout(()=>{ if(ws.readyState===0){marca('timeout'); res(JSON.stringify({ev}));} }, 15000); })`;
+const r = await send('script.evaluate', { expression: expr, target: { context: ctx }, awaitPromise: true, resultOwnership: 'none' });
+console.log('[ff] origin', ORIGIN, '→', r.result?.result?.value ?? JSON.stringify(r.result ?? r.error));
+const q = await send('script.evaluate', { expression: `navigator.permissions.query({name:'local-network-access'}).then(p=>p.state).catch(e=>'ERRO '+e.name+': '+e.message)`, target: { context: ctx }, awaitPromise: true });
+console.log('[ff] permissions.query(local-network-access):', q.result?.result?.value);
+await new Promise(r => setTimeout(r, 1000));
+const logs = eventos.filter(e => e.method === 'log.entryAdded').map(e => `${e.params.level}: ${e.params.text}`);
+if (logs.length) console.log('[ff] console:', JSON.stringify(logs.slice(-6), null, 1));
+await send('session.end'); ws.close();

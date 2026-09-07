@@ -62,14 +62,86 @@ jobs:
 
       # ── macOS: sem impressora virtual pronta no runner → unitários + enumeração (impressão real fica p/ Mac físico) ──
 
-      - name: Testes (unitários em todo SO + impressão virtual onde houver)
+      # Dois passos de propósito: o reator do Maven é fail-fast por dependência — se a impressão virtual (ambiente do
+      # runner: CUPS/Print to PDF) falhasse no MESMO comando, o agente-core (handshake/bind, código de produção)
+      # apareceria como SKIPPED nesse SO. Aqui os unitários de TODOS os módulos rodam sempre; a impressão real é à parte.
+      - name: Testes unitários (todos os módulos, sem impressora)
+        id: unitarios
+        shell: bash
+        run: ./mvnw -B -ntp test -Djava.awt.headless=true
+
+      - name: Impressão virtual (agente-impressao → PDF real via spooler do SO)
+        if: always() && env.IMPRESSORA_VIRTUAL != ''
         shell: bash
         run: |
-          ARGS=(-B -ntp test -Djava.awt.headless=true)
+          ./mvnw -B -ntp -pl agente-impressao test -Djava.awt.headless=true \
+            "-Dimpressora.virtual=${IMPRESSORA_VIRTUAL}" "-Dimpressao.saida=${IMPRESSAO_SAIDA}"
+
+      # ── Empacotamento: o MESMO código dos testes vira o binário que a loja instala (jlink + jpackage) ─────────────
+      # Os passos abaixo dependem SÓ dos unitários: um vermelho na impressão virtual (ambiente do runner) não pode
+      # esconder o empacotamento — foi o que aconteceu no run 34127331719 (Windows: empacotar SKIPPED).
+      - name: WiX 3 (Windows — exigido pelo jpackage para .exe)
+        if: always() && runner.os == 'Windows' && steps.unitarios.outcome == 'success'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue) -and -not $env:WIX) {
+            choco install wixtoolset --no-progress -y
+            Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          } else { Write-Host "WiX presente: $env:WIX" }
+
+      - name: Empacotar (jlink runtime enxuto + jpackage app-image + instalador do SO)
+        id: empacotar
+        if: always() && steps.unitarios.outcome == 'success'
+        shell: bash
+        run: ./mvnw -B -ntp -pl agente-app -am -DskipTests -Pempacotar package
+
+      # Smoke DO BINÁRIO gerado (não do jar): versão, diagnóstico (Ed25519 = módulo jdk.crypto.ec no runtime jlink;
+      # javax.print = java.desktop) e impressão REAL na impressora virtual onde houver. Usa o launcher -cli (Windows: o
+      # launcher principal é GUI, sem stdout).
+      - name: Smoke do binário empacotado
+        if: always() && steps.empacotar.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIST=agente-app/target/dist
+          NOME=AgroEase-Agente-Impressao
+          case "$RUNNER_OS" in
+            Linux)   BIN="$DIST/$NOME/bin/$NOME-cli" ;;
+            macOS)   BIN="$DIST/$NOME.app/Contents/MacOS/$NOME-cli" ;;
+            Windows) BIN="$DIST/$NOME/$NOME-cli.exe" ;;
+          esac
+          echo "== --versao";      "$BIN" --versao
+          echo "== --diagnostico"; "$BIN" --diagnostico
           if [ -n "${IMPRESSORA_VIRTUAL:-}" ]; then
-            ARGS+=("-Dimpressora.virtual=${IMPRESSORA_VIRTUAL}" "-Dimpressao.saida=${IMPRESSAO_SAIDA}")
+            echo "== impressão real pelo binário em '$IMPRESSORA_VIRTUAL'"
+            "$BIN" --gerar-pdf-teste agente-app/target/teste-smoke.pdf
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              rm -f "$IMPRESSAO_SAIDA"
+              "$BIN" --imprimir-teste "$IMPRESSORA_VIRTUAL" agente-app/target/teste-smoke.pdf
+              # o spooler cria o arquivo vazio e vai escrevendo: esperar não vazio E tamanho estável por 2 s
+              ANT=-1; for i in $(seq 1 60); do
+                T=$(stat -c %s "$IMPRESSAO_SAIDA" 2>/dev/null || echo 0)
+                if [ "$T" -gt 0 ] && [ "$T" = "$ANT" ]; then break; fi
+                ANT=$T; sleep 2
+              done
+              [ "$(stat -c %s "$IMPRESSAO_SAIDA" 2>/dev/null || echo 0)" -gt 0 ] || { echo "PDF não saiu em $IMPRESSAO_SAIDA"; exit 1; }
+              ls -la "$IMPRESSAO_SAIDA"
+            else
+              ANTES=$(ls "$IMPRESSAO_SAIDA" | wc -l)
+              "$BIN" --imprimir-teste "$IMPRESSORA_VIRTUAL" agente-app/target/teste-smoke.pdf
+              for i in $(seq 1 60); do [ "$(ls "$IMPRESSAO_SAIDA" | wc -l)" -gt "$ANTES" ] && break; sleep 1; done
+              [ "$(ls "$IMPRESSAO_SAIDA" | wc -l)" -gt "$ANTES" ] || { echo "PDF não saiu em $IMPRESSAO_SAIDA"; exit 1; }
+              ls -la "$IMPRESSAO_SAIDA"
+            fi
           fi
-          ./mvnw "${ARGS[@]}"
+          echo "== tamanhos"
+          du -sh agente-app/target/runtime "$DIST"/* || true
+          echo "== módulos do runtime embutido"
+          case "$RUNNER_OS" in
+            macOS)   "$DIST/$NOME.app/Contents/runtime/Contents/Home/bin/java" --list-modules ;;
+            Windows) "$DIST/$NOME/runtime/bin/java.exe" --list-modules ;;
+            *)       "$DIST/$NOME/lib/runtime/bin/java" --list-modules ;;
+          esac
 
       - name: Evidência — PDFs gerados pela impressora virtual
         if: always() && runner.os != 'macOS'
@@ -79,5 +151,17 @@ jobs:
           path: |
             ~/PDF/*.pdf
             C:\saida\*.pdf
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Evidência — instalador gerado pelo jpackage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalador-${{ matrix.os }}
+          path: |
+            agente-app/target/dist/*.deb
+            agente-app/target/dist/*.exe
+            agente-app/target/dist/*.dmg
           if-no-files-found: ignore
           retention-days: 7

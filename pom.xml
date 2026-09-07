@@ -16,7 +16,10 @@
     </description>
 
     <modules>
+        <module>agente-protocolo</module>
         <module>agente-impressao</module>
+        <module>agente-core</module>
+        <module>agente-app</module>
     </modules>
 
     <properties>
@@ -25,6 +28,9 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <pdfbox.version>3.0.5</pdfbox.version>
+        <java-websocket.version>1.6.0</java-websocket.version>
+        <jackson.version>2.19.2</jackson.version>
+        <slf4j.version>2.0.17</slf4j.version>
         <junit.version>5.11.4</junit.version>
         <assertj.version>3.27.3</assertj.version>
         <surefire.version>3.5.2</surefire.version>
@@ -36,6 +42,26 @@
                 <groupId>org.apache.pdfbox</groupId>
                 <artifactId>pdfbox</artifactId>
                 <version>${pdfbox.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.java-websocket</groupId>
+                <artifactId>Java-WebSocket</artifactId>
+                <version>${java-websocket.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-simple</artifactId>
+                <version>${slf4j.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.junit</groupId>
