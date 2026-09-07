@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>br.com.wagner.wagsyspet</groupId>
+        <artifactId>wagsyspet-agente</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>agente-app</artifactId>
+    <name>agente-app</name>
+    <description>
+        Ponto de entrada do binário instalado na loja ("Agente de Impressão AgroEase"): CLI de diagnóstico/impressão de
+        teste usada pelo smoke de empacotamento (jlink + jpackage) e, sem argumentos, o servidor do agente.
+        `mvn package` gera target/app/ com o jar principal + lib/ prontos para o jpackage (perfil Maven -Pempacotar).
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>br.com.wagner.wagsyspet</groupId>
+            <artifactId>agente-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>br.com.wagner.wagsyspet</groupId>
+            <artifactId>agente-protocolo</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>agente-app</finalName>
+        <plugins>
+            <!-- target/app/lib/*.jar = todas as dependências de runtime (entrada do jpackage) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.8.1</version>
+                <executions>
+                    <execution>
+                        <id>copiar-libs</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/app/lib</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- target/app/agente-app.jar com Main-Class e Class-Path relativo a lib/ -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <outputDirectory>${project.build.directory}/app</outputDirectory>
+                    <archive>
+                        <manifest>
+                            <mainClass>br.com.wagner.wagsyspet.agente.app.Main</mainClass>
+                            <addClasspath>true</addClasspath>
+                            <classpathPrefix>lib/</classpathPrefix>
+                        </manifest>
+                        <manifestEntries>
+                            <Implementation-Version>${project.version}</Implementation-Version>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <!--
+      ./mvnw -pl agente-app -DskipTests -Pempacotar package
+        gera target/runtime  (JRE enxuto via jlink)
+        gera target/dist/NOME[.app]  (app-image executável)
+        gera target/dist/INSTALADOR  (.deb / .exe / .dmg conforme o SO em que roda; jpackage só gera pro SO corrente)
+      Maven resolve os caminhos nativos em cada SO, por isso o empacotamento não é um .sh/.ps1 por sistema.
+    -->
+    <profiles>
+        <profile>
+            <id>empacotar</id>
+            <properties>
+                <!-- jdeps enxerga java.base,java.desktop,java.sql; jdk.crypto.ec (provider Ed25519, carregado por
+                     ServiceLoader) e java.net.http (pareamento F3) NÃO aparecem no jdeps — sem eles o binário falha
+                     só em produção. O comando de diagnóstico do binário prova o Ed25519 no CI. -->
+                <app.modulos>java.base,java.desktop,java.sql,jdk.crypto.ec,java.net.http</app.modulos>
+                <!-- jpackage: macOS exige 1º número maior que 0; Windows exige x.y.z numérico; não usar 0.1.0-SNAPSHOT -->
+                <app.versao>1.0.0</app.versao>
+                <app.nome>AgroEase-Agente-Impressao</app.nome>
+                <app.descricao>Agente de Impressão AgroEase</app.descricao>
+                <app.main>br.com.wagner.wagsyspet.agente.app.Main</app.main>
+                <app.runtime>${project.build.directory}/runtime</app.runtime>
+                <app.dist>${project.build.directory}/dist</app.dist>
+                <app.input>${project.build.directory}/app</app.input>
+                <app.jpackage.comum>--name ${app.nome} --app-version ${app.versao} --vendor AgroEase --description "${app.descricao}" --input "${app.input}" --main-jar agente-app.jar --main-class ${app.main} --runtime-image "${app.runtime}" --dest "${app.dist}" --java-options -Xmx128m --add-launcher ${app.nome}-cli="${project.basedir}/src/jpackage/cli.properties"</app.jpackage.comum>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-clean-plugin</artifactId>
+                        <version>3.4.1</version>
+                        <executions>
+                            <execution>
+                                <id>limpar-runtime-dist</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>clean</goal>
+                                </goals>
+                                <configuration>
+                                    <excludeDefaultDirectories>true</excludeDefaultDirectories>
+                                    <filesets>
+                                        <fileset><directory>${app.runtime}</directory></fileset>
+                                        <fileset><directory>${app.dist}</directory></fileset>
+                                    </filesets>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>jlink</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/jlink</executable>
+                                    <commandlineArgs>--add-modules ${app.modulos} --strip-debug --no-man-pages --no-header-files --compress zip-6 --output "${app.runtime}"</commandlineArgs>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>jpackage-app-image</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/jpackage</executable>
+                                    <commandlineArgs>--type app-image ${app.jpackage.comum}</commandlineArgs>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>jpackage-instalador</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>exec</goal>
+                                </goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/jpackage</executable>
+                                    <commandlineArgs>--type ${app.instalador.tipo} ${app.jpackage.comum} ${app.instalador.args}</commandlineArgs>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Por SO: tipo do instalador e opções específicas (jpackage só empacota pro SO em que roda). -->
+        <profile>
+            <id>empacotar-linux</id>
+            <activation><os><family>unix</family><name>Linux</name></os></activation>
+            <properties>
+                <app.instalador.tipo>deb</app.instalador.tipo>
+                <app.instalador.args>--linux-package-name agroease-agente-impressao --linux-deb-maintainer suporte@agroease.com.br --linux-shortcut --linux-menu-group Office</app.instalador.args>
+            </properties>
+        </profile>
+        <profile>
+            <id>empacotar-windows</id>
+            <activation><os><family>windows</family></os></activation>
+            <properties>
+                <app.instalador.tipo>exe</app.instalador.tipo>
+                <!-- per-user = instala sem UAC/administrador (plano §2.7); atalho no menu Iniciar -->
+                <app.instalador.args>--win-per-user-install --win-menu --win-menu-group AgroEase --win-shortcut</app.instalador.args>
+            </properties>
+        </profile>
+        <profile>
+            <id>empacotar-macos</id>
+            <activation><os><family>mac</family></os></activation>
+            <properties>
+                <app.instalador.tipo>dmg</app.instalador.tipo>
+                <app.instalador.args>--mac-package-identifier br.com.agroease.agente.impressao --mac-package-name AgroEase</app.instalador.args>
+            </properties>
+        </profile>
+    </profiles>
+</project>
