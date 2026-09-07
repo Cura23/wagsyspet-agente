@@ -1,0 +1,18 @@
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Saídas locais de spike/teste
+*.log
