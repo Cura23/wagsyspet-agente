@@ -7,7 +7,7 @@
     <parent>
         <groupId>br.com.wagner.wagsyspet</groupId>
         <artifactId>wagsyspet-agente</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>agente-impressao</artifactId>
@@ -21,6 +21,17 @@
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
+        </dependency>
+        <!-- só a API; o binding (arquivo/console) é do agente-app -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <!-- nos testes deste módulo, log no console -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <dependency>

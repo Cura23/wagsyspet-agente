@@ -1,0 +1,144 @@
+name: Release
+
+# Publica uma versão do Agente de Impressão AgroEase (plano F3 D23):
+#   git tag v1.2.3 && git push origin v1.2.3
+# 1) build = o MESMO ci.yml (testes + smoke do binário) nos 4 runners — ubuntu, windows, macos (arm64) e macos-15-intel (x64);
+# 2) publicar = SHA256SUMS.txt, <arquivo>.sha256, latest.json + latest.json.sig (Ed25519, chave de RELEASE separada do ticket,
+#    só no secret do ambiente "release") e `gh release create` com todos os artefatos;
+# 3) resumo do job com as envs AGENTE_URL_*/AGENTE_SHA256_*/AGENTE_VERSAO_ATUAL prontas para colar no Railway (passo manual).
+# Repo público → runners padrão são grátis; nunca usar runners "-large" (pagos mesmo em público).
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag já existente para (re)publicar, ex.: v1.2.3'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  versao:
+    name: Versão da tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      versao: ${{ steps.v.outputs.versao }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - id: v
+        shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}          # via env, nunca interpolado no script (injeção por quem tem write) — adversarial F3 R-menor
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG="${TAG_INPUT:-$REF_NAME}"
+          [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-([0-9A-Za-z.]+))?$ ]] || { echo "tag inválida: $TAG (use vX.Y.Z ou vX.Y.Z-rc1)"; exit 1; }
+          # (re)publicar por dispatch SÓ a partir da própria tag: o build usa o commit do gatilho — disparado de uma branch, publicaria o
+          # HEAD da branch carimbado como a tag e sobrescreveria os assets (o sha colado no Railway deixaria de bater). Adversarial F3 R4.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.ref }}" != "refs/tags/$TAG" ]; then
+            echo "Dispare o release a partir da TAG $TAG (Use workflow from → Tags → $TAG), não de uma branch (${{ github.ref }})."; exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "versao=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([[ -n "${BASH_REMATCH[2]}" ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  construir:
+    name: Build + testes + smoke
+    needs: versao
+    uses: ./.github/workflows/ci.yml
+    with:
+      revision: ${{ needs.versao.outputs.versao }}
+      matriz: '{"os":["ubuntu-22.04","windows-latest","macos-latest","macos-15-intel"]}'
+
+  publicar:
+    name: Publicar no GitHub Releases
+    needs: [versao, construir]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.versao.outputs.tag }}
+
+      - name: Baixar os instaladores dos 4 runners
+        uses: actions/download-artifact@v4
+        with:
+          pattern: instalador-*
+          path: artefatos
+          merge-multiple: true
+
+      - name: SHA256SUMS + latest.json assinado (Ed25519, chave de release)
+        shell: bash
+        env:
+          CHAVE_PEM: ${{ secrets.RELEASE_LATEST_JSON_PRIVKEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$CHAVE_PEM" ] || { echo "secret RELEASE_LATEST_JSON_PRIVKEY ausente no ambiente 'release'"; exit 1; }
+          umask 077; printf '%s\n' "$CHAVE_PEM" > "$RUNNER_TEMP/release.pem"
+          ls -la artefatos
+          # protocolo = ProtocoloVersao.ATUAL do código (não o default do script), para o latest.json nunca anunciar protocolo velho
+          PROTO=$(grep -oE 'ATUAL\s*=\s*[0-9]+' agente-protocolo/src/main/java/br/com/wagner/wagsyspet/agente/protocolo/ProtocoloVersao.java | grep -oE '[0-9]+$')
+          [ -n "$PROTO" ] || { echo "não achei ProtocoloVersao.ATUAL"; exit 1; }
+          scripts/release/montar-latest.sh "${{ needs.versao.outputs.versao }}" artefatos "${{ github.repository }}" "$RUNNER_TEMP/release.pem" "$PROTO"
+          rm -f "$RUNNER_TEMP/release.pem"
+          # a chave pública EMBUTIDA no agente tem de validar o que acabamos de assinar (senão a F6 recusaria a própria release)
+          PUB=$(grep '^release.chave.publica=' agente-app/src/main/resources/release.properties | cut -d= -f2-)
+          printf -- '-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n' "$PUB" > "$RUNNER_TEMP/pub.pem"
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/pub.pem" -rawin -in artefatos/latest.json -sigfile artefatos/latest.json.sig
+          KID_EMBUTIDO=$(grep '^release.kid=' agente-app/src/main/resources/release.properties | cut -d= -f2-)
+          grep -q "\"kid\":\"$KID_EMBUTIDO\"" artefatos/latest.json || { echo "kid do latest.json ≠ kid embutido no agente"; exit 1; }
+
+      - name: Criar a release com todos os artefatos
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.versao.outputs.tag }}
+          PRERELEASE: ${{ needs.versao.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          cd artefatos
+          {
+            echo "## Agente de Impressão AgroEase ${TAG#v}"
+            echo
+            echo "Instaladores por sistema (não assinados — ver instruções na página de instalação do AgroEase):"
+            echo
+            echo '```'; cat SHA256SUMS.txt; echo '```'
+            echo
+            echo "\`latest.json\` + \`latest.json.sig\` (Ed25519, kid $(grep -o '"kid":"[0-9a-f]*"' latest.json | cut -d'"' -f4)) alimentam a atualização automática."
+          } > notas.md
+          FLAGS=(--title "Agente de Impressão AgroEase ${TAG#v}" --notes-file notas.md --verify-tag)
+          [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG já existe: substituindo os arquivos"
+            gh release upload "$TAG" AgroEase-Agente-Impressao-* SHA256SUMS.txt latest.json latest.json.sig --clobber
+          else
+            gh release create "$TAG" "${FLAGS[@]}" AgroEase-Agente-Impressao-* SHA256SUMS.txt latest.json latest.json.sig
+          fi
+
+      - name: Resumo — envs para colar no Railway
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Release ${{ needs.versao.outputs.tag }} publicada"
+            echo
+            echo "Cole no serviço do backend no Railway (Variables) e faça o redeploy:"
+            echo
+            echo '```'
+            cat artefatos/envs-railway.txt 2>/dev/null || echo "(envs não geradas — veja o passo anterior)"
+            echo '```'
+            echo
+            echo "- \`AGENTE_VERSAO_MINIMA\` e \`AGENTE_PROTOCOLO_MINIMO\` **não** mudam automaticamente (só por decisão explícita — plano F3 D24)."
+            echo "- Endereço fixo do manifesto: https://github.com/${{ github.repository }}/releases/latest/download/latest.json"
+          } >> "$GITHUB_STEP_SUMMARY"

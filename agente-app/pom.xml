@@ -7,7 +7,7 @@
     <parent>
         <groupId>br.com.wagner.wagsyspet</groupId>
         <artifactId>wagsyspet-agente</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>agente-app</artifactId>
@@ -29,9 +29,10 @@
             <artifactId>agente-protocolo</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- SLF4J → java.util.logging → arquivo rotativo na pasta do agente (LogDoAgente). O launcher GUI do Windows não tem stderr. -->
         <dependency>
             <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
+            <artifactId>slf4j-jdk14</artifactId>
             <scope>runtime</scope>
         </dependency>
 
@@ -50,6 +51,28 @@
     <build>
         <finalName>agente-app</finalName>
         <plugins>
+            <!-- copy-dependencies NÃO remove jars antigos: uma dependência que saiu do runtime (ex.: slf4j-simple) ficaria em
+                 target/app/lib e entraria no jpackage (2 bindings de log). Limpa a pasta antes de copiar, em todo build. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <version>3.4.1</version>
+                <executions>
+                    <execution>
+                        <id>limpar-libs</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                        <configuration>
+                            <excludeDefaultDirectories>true</excludeDefaultDirectories>
+                            <filesets>
+                                <fileset><directory>${project.build.directory}/app/lib</directory></fileset>
+                            </filesets>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <!-- target/app/lib/*.jar = todas as dependências de runtime (entrada do jpackage) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -105,19 +128,43 @@
                 <!-- jdeps enxerga java.base,java.desktop,java.sql; jdk.crypto.ec (provider Ed25519, carregado por
                      ServiceLoader) e java.net.http (pareamento F3) NÃO aparecem no jdeps — sem eles o binário falha
                      só em produção. O comando de diagnóstico do binário prova o Ed25519 no CI. -->
-                <app.modulos>java.base,java.desktop,java.sql,jdk.crypto.ec,java.net.http</app.modulos>
-                <!-- jpackage: macOS exige 1º número maior que 0; Windows exige x.y.z numérico; não usar 0.1.0-SNAPSHOT -->
-                <app.versao>1.0.0</app.versao>
+                <app.modulos>java.base,java.desktop,java.sql,java.logging,jdk.crypto.ec,java.net.http</app.modulos>
+                <!-- Versão do instalador (app-version): macOS exige 1º número maior que 0; Windows exige x.y.z numérico; sem
+                     sufixo. É ${revision} SEM o sufixo, calculada pelo build-helper (regex-property) em app.versao.jpackage na
+                     fase initialize. Propriedade NÃO declarada aqui de propósito: propriedade do pom é interpolada na leitura do
+                     modelo (antes dos plugins) e ignoraria o regex; nos commandlineArgs do exec ela é avaliada na execução. -->
                 <app.nome>AgroEase-Agente-Impressao</app.nome>
                 <app.descricao>Agente de Impressão AgroEase</app.descricao>
                 <app.main>br.com.wagner.wagsyspet.agente.app.Main</app.main>
                 <app.runtime>${project.build.directory}/runtime</app.runtime>
                 <app.dist>${project.build.directory}/dist</app.dist>
                 <app.input>${project.build.directory}/app</app.input>
-                <app.jpackage.comum>--name ${app.nome} --app-version ${app.versao} --vendor AgroEase --description "${app.descricao}" --input "${app.input}" --main-jar agente-app.jar --main-class ${app.main} --runtime-image "${app.runtime}" --dest "${app.dist}" --java-options -Xmx128m --add-launcher ${app.nome}-cli="${project.basedir}/src/jpackage/cli.properties"</app.jpackage.comum>
+                <app.jpackage.comum>--name ${app.nome} --vendor AgroEase --copyright "AgroEase" --description "${app.descricao}" --input "${app.input}" --main-jar agente-app.jar --main-class ${app.main} --runtime-image "${app.runtime}" --dest "${app.dist}" --java-options -Xmx128m --java-options -Dsun.java2d.print.polling=false --java-options -Dapple.awt.UIElement=true --add-launcher ${app.nome}-cli="${project.basedir}/src/jpackage/cli.properties"</app.jpackage.comum>
             </properties>
             <build>
                 <plugins>
+                    <!-- app.versao = ${revision} sem o sufixo (o jpackage exige X.Y.Z numérico) -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <executions>
+                            <execution>
+                                <id>versao-jpackage</id>
+                                <phase>initialize</phase>
+                                <goals>
+                                    <goal>regex-property</goal>
+                                </goals>
+                                <configuration>
+                                    <name>app.versao.jpackage</name>
+                                    <value>${revision}</value>
+                                    <regex>-.*$</regex>
+                                    <replacement></replacement>
+                                    <failIfNoMatch>false</failIfNoMatch>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-clean-plugin</artifactId>
@@ -163,7 +210,7 @@
                                 </goals>
                                 <configuration>
                                     <executable>${java.home}/bin/jpackage</executable>
-                                    <commandlineArgs>--type app-image ${app.jpackage.comum}</commandlineArgs>
+                                    <commandlineArgs>--type app-image --app-version ${app.versao.jpackage} ${app.jpackage.comum}</commandlineArgs>
                                 </configuration>
                             </execution>
                             <execution>
@@ -174,7 +221,7 @@
                                 </goals>
                                 <configuration>
                                     <executable>${java.home}/bin/jpackage</executable>
-                                    <commandlineArgs>--type ${app.instalador.tipo} ${app.jpackage.comum} ${app.instalador.args}</commandlineArgs>
+                                    <commandlineArgs>--type ${app.instalador.tipo} --app-version ${app.versao.jpackage} ${app.jpackage.comum} ${app.instalador.args}</commandlineArgs>
                                 </configuration>
                             </execution>
                         </executions>
@@ -198,7 +245,9 @@
             <properties>
                 <app.instalador.tipo>exe</app.instalador.tipo>
                 <!-- per-user = instala sem UAC/administrador (plano §2.7); atalho no menu Iniciar -->
-                <app.instalador.args>--win-per-user-install --win-menu --win-menu-group AgroEase --win-shortcut</app.instalador.args>
+                <!-- upgrade-uuid FIXO: o MSI reconhece 1.0.1 como upgrade de 1.0.0 (mesmo produto) e o Run do HKCU continua apontando
+                     para o mesmo caminho per-user. Sem ele o jpackage deriva o UUID de vendor+nome — estável, mas frágil a renome. -->
+                <app.instalador.args>--win-per-user-install --win-menu --win-menu-group AgroEase --win-shortcut --win-upgrade-uuid dd216254-fab2-4fd4-838d-bf0ae3df6773</app.instalador.args>
             </properties>
         </profile>
         <profile>

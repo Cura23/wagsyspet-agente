@@ -3,6 +3,8 @@ package br.com.wagner.wagsyspet.agente.core;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import br.com.wagner.wagsyspet.agente.protocolo.ProtocoloVersao;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
@@ -18,9 +20,11 @@ import java.util.Set;
  * <pre>
  *   -Dagente.porta=28421
  *   -Dagente.origins=https://wagsyspet-frontend.vercel.app,http://localhost:5173
+ *   -Dagente.versao=1.0.0-dev        (obrigatória fora do jar — sem MANIFEST não há versão; nunca "dev")
+ *   -Dagente.id=dev-sem-pareamento   (até o L2 ligar o pareamento, o agenteId anunciado vem daqui)
  * </pre>
- * Na F3 isto vira o binário {@code jpackage} com pareamento, ticket e bandeja; a leitura de config vai pro
- * arquivo do agente, não pra -D.
+ * O binário instalado entra por {@code agente-app/Main}, que monta o {@link InfoAgente} a partir do MANIFEST e chama
+ * {@link #main(String[], InfoAgente)}; a leitura de config vai pro arquivo do agente (L2), não pra -D.
  */
 public final class AgenteMain {
 
@@ -29,7 +33,8 @@ public final class AgenteMain {
     /** Porta padrão do agente (plano §6: fixa, alta, fora das faixas comuns). */
     public static final int PORTA_PADRAO = 28421;
     public static final String ORIGINS_PADRAO = "https://wagsyspet-frontend.vercel.app,http://localhost:5173";
-    public static final InfoAgente INFO = new InfoAgente("0.1.0-spike", 1);
+    /** agenteId de desenvolvimento enquanto o pareamento (L2) não fornece o real. */
+    public static final String AGENTE_ID_DEV = "dev-sem-pareamento";
 
     private AgenteMain() {
     }
@@ -39,13 +44,28 @@ public final class AgenteMain {
     /** Código de saída quando o servidor morre depois de subir: o supervisor do SO (F3) reinicia o processo. */
     static final int SAIDA_SERVIDOR_MORTO = 3;
 
+    /** Entrada de DEV ({@code exec:java}): versão por {@code -Dagente.versao} (sem MANIFEST), agenteId por {@code -Dagente.id}. */
     public static void main(String[] args) throws Exception {
+        String versao = VersaoDoBinario.doClasspath(AgenteMain.class);
+        main(args, new InfoAgente(versao, ProtocoloVersao.ATUAL, System.getProperty("agente.id", AGENTE_ID_DEV)));
+    }
+
+    /** Host de dev SEM pareamento (todo auth recusado): Origins e porta por -D. */
+    public static void main(String[] args, InfoAgente info) throws Exception {
         int porta = Integer.getInteger("agente.porta", PORTA_PADRAO);
         Set<String> origins = parseOrigins(System.getProperty("agente.origins", ORIGINS_PADRAO));
+        rodar(new ServidorAgente(porta, origins, info), info);
+    }
 
-        ServidorAgente servidor = new ServidorAgente(porta, origins, INFO);
+    /**
+     * Sobe o servidor já montado (dev ou produção via {@link MontadorServidor}) e segura o processo: shutdown hook,
+     * watchdog de escuta e saída {@value #SAIDA_SERVIDOR_MORTO} se o servidor morrer depois de subir (supervisor reinicia).
+     * Só retorna lançando (porta ocupada) ou encerrando o processo.
+     */
+    public static void rodar(ServidorAgente servidor, InfoAgente info) throws Exception {
         servidor.iniciar(Duration.ofSeconds(10)); // porta ocupada → lança aqui, processo sai ≠ 0 (não fica zumbi)
-        log.info("Agente de Impressão AgroEase {} pronto. Ctrl+C para encerrar.", INFO.versao());
+        log.info("Agente de Impressão AgroEase {} pronto em ws://127.0.0.1:{} (agenteId={}). Ctrl+C para encerrar.",
+                info.versao(), servidor.getPort(), info.agenteId());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
@@ -55,7 +75,7 @@ public final class AgenteMain {
             }
         }, "agente-shutdown"));
 
-        iniciarWatchdog(servidor);
+        vigiar(servidor);
 
         // Em vez de join() eterno: acorda quando a lib sinalizar erro fatal OU o watchdog vir a porta fechada.
         Exception causa = servidor.falhaFatal().get();
@@ -68,7 +88,7 @@ public final class AgenteMain {
      * Prova periódica, de fora, de que a porta ainda aceita conexão. Cobre o caso em que a lib fecha o canal de
      * LISTEN em silêncio (IOException no accept, ex.: sem file descriptors) e o processo segue "vivo" sem escutar.
      */
-    private static void iniciarWatchdog(ServidorAgente servidor) {
+    public static void vigiar(ServidorAgente servidor) {
         Thread t = new Thread(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {

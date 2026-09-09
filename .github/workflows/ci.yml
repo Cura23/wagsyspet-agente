@@ -1,22 +1,41 @@
 name: CI
 
+# Roda como CI (push na main / PR / manual) e como ETAPA DE BUILD do release.yml (workflow_call): mesmos testes, mesmo
+# smoke do binário — o que é publicado é exatamente o que passou aqui. Repo público → Actions grátis (runners padrão).
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      revision:
+        description: 'Versão do binário (X.Y.Z) — vira ${revision} do Maven; vazio = 1.0.0-SNAPSHOT'
+        type: string
+        default: ''
+      matriz:
+        description: 'JSON da matriz de runners (release acrescenta macos-15-intel para o macos-x64)'
+        type: string
+        default: ''
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' && !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # -Drevision=X.Y.Z só quando o release pede; no CI comum fica o default do pom
+  REVISAO_ARG: ${{ inputs.revision != '' && format('-Drevision={0}', inputs.revision) || '' }}
 
 jobs:
   test:
     name: Testes (${{ matrix.os }})
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+      # ubuntu-22.04 de propósito: o .deb gerado no 24.04 declara Depends: libasound2t64 e NÃO instala em Ubuntu 22.04 LTS/Debian 12/Mint 21;
+      # o gerado no 22.04 (libasound2) instala nos dois (o t64 faz Provides: libasound2). Adversarial F3 R3.
+      matrix: ${{ fromJSON(inputs.matriz != '' && inputs.matriz || '{"os":["ubuntu-22.04","windows-latest","macos-latest"]}') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
@@ -68,13 +87,15 @@ jobs:
       - name: Testes unitários (todos os módulos, sem impressora)
         id: unitarios
         shell: bash
-        run: ./mvnw -B -ntp test -Djava.awt.headless=true
+        run: ./mvnw -B -ntp $REVISAO_ARG test -Djava.awt.headless=true
 
-      - name: Impressão virtual (agente-impressao → PDF real via spooler do SO)
+      # F3-L3: além do motor, o PROTOCOLO inteiro (hello → auth → imprimir por WebSocket) contra a impressora virtual.
+      - name: Impressão virtual (motor + protocolo WS → PDF real via spooler do SO)
         if: always() && env.IMPRESSORA_VIRTUAL != ''
         shell: bash
         run: |
-          ./mvnw -B -ntp -pl agente-impressao test -Djava.awt.headless=true \
+          # -am: agente-core depende de agente-protocolo (F3-L0) e o passo 1 não instala nada no repositório local
+          ./mvnw -B -ntp $REVISAO_ARG -pl agente-impressao,agente-core -am test -Djava.awt.headless=true -Dsun.java2d.print.polling=false \
             "-Dimpressora.virtual=${IMPRESSORA_VIRTUAL}" "-Dimpressao.saida=${IMPRESSAO_SAIDA}"
 
       # ── Empacotamento: o MESMO código dos testes vira o binário que a loja instala (jlink + jpackage) ─────────────
@@ -93,7 +114,7 @@ jobs:
         id: empacotar
         if: always() && steps.unitarios.outcome == 'success'
         shell: bash
-        run: ./mvnw -B -ntp -pl agente-app -am -DskipTests -Pempacotar package
+        run: ./mvnw -B -ntp $REVISAO_ARG -pl agente-app -am -DskipTests -Pempacotar package
 
       # Smoke DO BINÁRIO gerado (não do jar): versão, diagnóstico (Ed25519 = módulo jdk.crypto.ec no runtime jlink;
       # javax.print = java.desktop) e impressão REAL na impressora virtual onde houver. Usa o launcher -cli (Windows: o
@@ -110,7 +131,20 @@ jobs:
             macOS)   BIN="$DIST/$NOME.app/Contents/MacOS/$NOME-cli" ;;
             Windows) BIN="$DIST/$NOME/$NOME-cli.exe" ;;
           esac
-          echo "== --versao";      "$BIN" --versao
+          # Versão ÚNICA (F3-L0): o binário anuncia exatamente ${revision} do pom (MANIFEST → hello_ok e /parear) e o
+          # instalador leva a mesma versão sem sufixo. "dev" ou 0.1.0-spike aqui = build quebrado (426 no pareamento).
+          V=$(./mvnw -q -B -ntp $REVISAO_ARG help:evaluate -Dexpression=revision -DforceStdout)
+          echo "== --versao (esperado: $V)"; SAIDA=$("$BIN" --versao); echo "$SAIDA"
+          grep -qF "AgroEase $V " <<<"$SAIDA " || { echo "versão do binário ($SAIDA) não é a do pom ($V)"; exit 1; }
+          grep -qiE "dev|spike" <<<"$SAIDA" && { echo "versão de desenvolvimento no binário: $SAIDA"; exit 1; }
+          V_INST="${V%%-*}"
+          ls "$DIST" | grep -qF "$V_INST" || { echo "instalador em $DIST não leva a versão $V_INST:"; ls -la "$DIST"; exit 1; }
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # adversarial F3 R3: o jpackage copia as deps do host de build; um Depends com sufixo t64 (Ubuntu 24.04) não instala em
+            # 22.04 LTS/Debian 12/Mint 21. O runner é ubuntu-22.04 de propósito — esta guarda impede um upgrade silencioso do runner.
+            DEPS=$(dpkg-deb -f "$DIST"/*.deb Depends); echo "Depends do .deb: $DEPS"
+            grep -q "t64" <<<"$DEPS" && { echo ".deb com dependência t64 (host de build novo demais) — não instala em Ubuntu 22.04/Debian 12"; exit 1; }
+          fi
           echo "== --diagnostico"; "$BIN" --diagnostico
           if [ -n "${IMPRESSORA_VIRTUAL:-}" ]; then
             echo "== impressão real pelo binário em '$IMPRESSORA_VIRTUAL'"
@@ -134,6 +168,28 @@ jobs:
               ls -la "$IMPRESSAO_SAIDA"
             fi
           fi
+          # F3-L5: "iniciar com o sistema" pelo binário — instala, confere, desinstala (idempotente) no mecanismo de cada SO
+          # (Run do Windows / LaunchAgent / systemd --user + .desktop). Pasta de dados isolada; no Linux o XDG_CONFIG_HOME
+          # também, para não tocar o ~/.config do runner. Sem sessão gráfica, launchctl/systemctl podem falhar: só avisam.
+          echo "== autostart (--instalar / --status / --desinstalar)"
+          DADOS_CI="$RUNNER_TEMP/agente-ci-dados"; export XDG_CONFIG_HOME="$RUNNER_TEMP/agente-ci-xdg"; mkdir -p "$XDG_CONFIG_HOME"
+          "$BIN" --instalar --dir-dados "$DADOS_CI"
+          "$BIN" --status --dir-dados "$DADOS_CI" | tee /tmp/status.txt
+          grep -q "Iniciar com o sistema: ativado" /tmp/status.txt || { echo "autostart não ficou ativado"; exit 1; }
+          case "$RUNNER_OS" in
+            Linux)   test -f "$XDG_CONFIG_HOME/autostart/agroease-agente-impressao.desktop" ;;
+            macOS)   test -f "$HOME/Library/LaunchAgents/br.com.agroease.agente.impressao.plist" ;;
+            Windows) MSYS_NO_PATHCONV=1 reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run' /v AgroEaseAgenteImpressao ;;  # sem isso o Git Bash troca /v por um caminho
+          esac
+          "$BIN" --instalar --dir-dados "$DADOS_CI" >/dev/null   # idempotente
+          "$BIN" --desinstalar --dir-dados "$DADOS_CI"
+          "$BIN" --status --dir-dados "$DADOS_CI" | grep -q "Iniciar com o sistema: desativado" || { echo "autostart não foi removido"; exit 1; }
+          "$BIN" --desinstalar --dir-dados "$DADOS_CI" >/dev/null  # idempotente
+          unset XDG_CONFIG_HOME
+          # exatamente UM binding de log no binário (slf4j-jdk14 → arquivo); um 2º (slf4j-simple) mandaria o log para o lugar errado
+          echo "== bindings de log"
+          SAIDA_VERSAO=$("$BIN" --versao 2>&1 || true)   # capturar antes de grep: com pipefail, grep -q fechando o pipe derruba o passo
+          grep -q "multiple SLF4J providers" <<<"$SAIDA_VERSAO" && { echo "dois bindings SLF4J no binário"; exit 1; } || echo "1 binding, ok"
           echo "== tamanhos"
           du -sh agente-app/target/runtime "$DIST"/* || true
           echo "== módulos do runtime embutido"
@@ -154,14 +210,43 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # F3-L6: nomes canônicos AgroEase-Agente-Impressao-<V>-<so>-<arch>.<ext> (as chaves que o backend F1 conhece:
+      # windows | linux | macos-arm64 | macos-x64) e, no macOS, prova de que o jpackage assinou ad-hoc (Gatekeeper exige).
+      - name: Renomear instalador (so-arch) e verificar assinatura macOS
+        if: always() && steps.empacotar.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIST=agente-app/target/dist; NOME=AgroEase-Agente-Impressao
+          # nome do asset leva a versão COMPLETA (inclusive -rc1): é ela que o montar-latest.sh e o latest.json usam; o instalador
+          # por dentro continua X.Y.Z (jpackage recusa sufixo) — adversarial F3 R1
+          V=$(./mvnw -q -B -ntp $REVISAO_ARG help:evaluate -Dexpression=revision -DforceStdout)
+          case "$(uname -m)" in x86_64|amd64) ARCH=x64 ;; arm64|aarch64) ARCH=arm64 ;; *) ARCH="$(uname -m)" ;; esac
+          case "$RUNNER_OS" in
+            Linux)   SO=linux;   EXT=deb; ORIG=$(ls "$DIST"/*.deb) ;;
+            Windows) SO=windows; EXT=exe; ORIG=$(ls "$DIST"/*.exe) ;;
+            macOS)   SO=macos;   EXT=dmg; ORIG=$(ls "$DIST"/*.dmg)
+                     # o Gatekeeper exige ao menos assinatura ad-hoc: verificar o .app do app-image E o que vai DENTRO do .dmg (R5)
+                     codesign --verify --strict --deep "$DIST/$NOME.app" || { echo "assinatura ad-hoc ausente/inválida no app-image"; exit 1; }
+                     PONTO="$RUNNER_TEMP/dmg"; mkdir -p "$PONTO"
+                     hdiutil attach -nobrowse -readonly -mountpoint "$PONTO" "$ORIG" >/dev/null
+                     codesign --verify --strict --deep "$PONTO/$NOME.app" || { hdiutil detach "$PONTO" >/dev/null; echo "assinatura inválida dentro do .dmg"; exit 1; }
+                     codesign -dv "$PONTO/$NOME.app" 2>&1 | grep -E "Signature|Identifier|TeamIdentifier" || true
+                     hdiutil detach "$PONTO" >/dev/null
+                     echo "codesign OK (ad-hoc) no app-image e no .dmg" ;;
+          esac
+          NOVO="$DIST/$NOME-$V-$SO-$ARCH.$EXT"
+          mv -v "$ORIG" "$NOVO"
+          ls -la "$DIST"
+
       - name: Evidência — instalador gerado pelo jpackage
-        if: always()
+        if: always() && steps.empacotar.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: instalador-${{ matrix.os }}
           path: |
-            agente-app/target/dist/*.deb
-            agente-app/target/dist/*.exe
-            agente-app/target/dist/*.dmg
-          if-no-files-found: ignore
+            agente-app/target/dist/AgroEase-Agente-Impressao-*.deb
+            agente-app/target/dist/AgroEase-Agente-Impressao-*.exe
+            agente-app/target/dist/AgroEase-Agente-Impressao-*.dmg
+          if-no-files-found: error
           retention-days: 7

@@ -29,10 +29,10 @@ PWA (Vercel) ──ws://127.0.0.1──► agente (bandeja) ──► javax.prin
 
 | Módulo | Papel |
 |---|---|
-| `agente-protocolo` | Contrato backend ↔ agente: **ticket Ed25519** (`AssinadorTicket` = lado backend, `VerificadorTicket` = lado agente, `ChavesTicket` SPKI/PKCS#8 base64) + **vetores de teste** `vetores-ticket-v1.json` que os dois repos rodam; *(F3)* mensagens do WebSocket |
-| `agente-impressao` | Imprimir PDF por nome de impressora (`ImpressoraJavaxPrint`, `ImpressoraCupsLp`) |
-| `agente-core` | Servidor WebSocket em `127.0.0.1` (`ServidorAgente`), porteiro do handshake (`PorteiroHandshake`: Origin exata + Host loopback), teto de frame 4 MB, protocolo mínimo `hello/ping`; *(F3)* fila, pareamento, ticket |
-| `agente-app` | Ponto de entrada do binário (`Main`: `--versao`, `--diagnostico`, `--gerar-pdf-teste`, `--imprimir-teste`; sem args = servidor) + **empacotamento** `-Pempacotar` (jlink + jpackage → app-image e `.deb`/`.exe`/`.dmg`); *(F3)* bandeja, autostart, credencial |
+| `agente-protocolo` | Contrato backend ↔ agente: **ticket Ed25519** (`AssinadorTicket` = lado backend, `VerificadorTicket` = lado agente, `ChavesTicket` SPKI/PKCS#8 base64) + **vetores de teste** `vetores-ticket-v1.json` que os dois repos rodam; `ProtocoloVersao`; `VerificadorAssinaturaRelease` (assinatura do `latest.json`) |
+| `agente-impressao` | Imprimir PDF por nome de impressora (`ImpressoraJavaxPrint` no Windows, `ImpressoraCupsLp` no Linux/macOS), `AquecedorPdfBox` (cache de fontes na subida) |
+| `agente-core` | Servidor WebSocket em `127.0.0.1` (`ServidorAgente`): porteiro do handshake (Origin exata + Host loopback), teto de frame 4 MiB, **protocolo v1** (`hello` → `auth` com ticket → `listar_impressoras`/`selecionar_impressora`/`imprimir`), uma conexão autenticada por Origin, fila de impressão fora da thread da conexão (`FilaImpressao`), fallback de porta 28421 → 28422; **pareamento** (`pareamento/`: `ClientePareamento`, `CofreCredencial` AES-GCM, `DiretoriosDoAgente` por SO) |
+| `agente-app` | Binário instalado (`Main`): sem argumentos = programa de desktop (bandeja ou janela; headless só se pareado); `--parear`, `--desparear`, `--status`, `--diagnostico`, `--instalar`/`--desinstalar` (iniciar com o sistema), `--versao`, `--gerar-pdf-teste`, `--imprimir-teste`; log em `logs/agente-0.log`; **empacotamento** `-Pempacotar` (jlink + jpackage → `.deb`/`.exe`/`.dmg`) |
 
 ## Desenvolvimento
 
@@ -57,6 +57,29 @@ agente-app/target/dist/AgroEase-Agente-Impressao/bin/AgroEase-Agente-Impressao-c
 Teste manual do prompt de Local Network Access no navegador: `docs/roteiro-spike-lna.md`.
 
 Sem impressora física: no Linux, `sudo apt install printer-driver-cups-pdf` cria a impressora virtual `PDF` (saída em `~/PDF`).
+
+## Uso na loja (resumo)
+
+1. Instale o pacote do seu sistema (`.exe`, `.deb` ou `.dmg` da última release).
+2. No painel AgroEase, em **Configurações → Geral → Impressão de Cupom**, gere o código de pareamento e cole no agente
+   ("Parear…" na bandeja/janela, ou `AgroEase-Agente-Impressao-cli --parear <codigo>`). Ao parear, o agente passa a iniciar com o sistema.
+3. Escolha a impressora deste computador ("Impressora…") e faça um teste.
+
+Pasta de dados por usuário: `%LOCALAPPDATA%\AgroEase\agente-impressao` (Windows), `~/.config/agroease/agente-impressao` (Linux),
+`~/Library/Application Support/AgroEase/agente-impressao` (macOS). `--status` e `--diagnostico` mostram tudo que o suporte precisa, sem segredos.
+
+## Release
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3     # dispara .github/workflows/release.yml
+```
+
+O `release.yml` reaproveita o `ci.yml` (testes + smoke do binário) em 4 runners (Linux, Windows, macOS arm64 e macOS x64), renomeia os
+instaladores para `AgroEase-Agente-Impressao-<versão>-<so>-<arch>.<ext>`, gera `SHA256SUMS.txt`, `latest.json` e `latest.json.sig`
+(assinatura Ed25519 com a chave de release — a pública está em `agente-app/src/main/resources/release.properties`; a privada só no
+secret `RELEASE_LATEST_JSON_PRIVKEY` do ambiente `release`) e publica no GitHub Releases. O resumo do job traz as variáveis
+`AGENTE_URL_*` / `AGENTE_SHA256_*` / `AGENTE_VERSAO_ATUAL` para o backend. A versão do binário é única: `-Drevision=<versão>` → MANIFEST →
+`hello_ok` → `--app-version` do jpackage; o smoke falha se divergir. Manifesto fixo: `…/releases/latest/download/latest.json`.
 
 ## Licença
 

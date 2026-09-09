@@ -7,7 +7,7 @@
     <parent>
         <groupId>br.com.wagner.wagsyspet</groupId>
         <artifactId>wagsyspet-agente</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>agente-core</artifactId>
@@ -23,6 +23,12 @@
             <artifactId>agente-impressao</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- F3: ticket Ed25519 (VerificadorTicket) e versão do protocolo — o core fala o contrato, não só transporta -->
+        <dependency>
+            <groupId>br.com.wagner.wagsyspet</groupId>
+            <artifactId>agente-protocolo</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.java-websocket</groupId>
             <artifactId>Java-WebSocket</artifactId>
@@ -35,11 +41,12 @@
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
-        <!-- Binding de log do agente (binário final também usa: log em stderr/arquivo, sem framework pesado). -->
+        <!-- Binding só nos TESTES deste módulo (console). O binário usa slf4j-jdk14 → arquivo rotativo (agente-app, F3 D19);
+             dois bindings no classpath = aviso do SLF4J e log em lugar errado. -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
-            <scope>runtime</scope>
+            <scope>test</scope>
         </dependency>
 
         <dependency>
@@ -64,6 +71,13 @@
                 <configuration>
                     <mainClass>br.com.wagner.wagsyspet.agente.core.AgenteMain</mainClass>
                     <classpathScope>runtime</classpathScope>
+                    <!-- sem jar não há MANIFEST: a versão de dev vem daqui (nunca "dev" — ver VersaoDoBinario) -->
+                    <systemProperties>
+                        <systemProperty>
+                            <key>agente.versao</key>
+                            <value>${project.version}</value>
+                        </systemProperty>
+                    </systemProperties>
                 </configuration>
             </plugin>
         </plugins>
