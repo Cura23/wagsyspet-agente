@@ -3,6 +3,8 @@ package br.com.wagner.wagsyspet.agente.app.autostart;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -100,6 +102,7 @@ class AutostartTest {
     }
 
     @Nested
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "gerador só roda em macOS; os caminhos POSIX do teste absolutizam como D:\\... no Windows — CI F3")
     @DisplayName("macOS")
     class Mac {
         @Test
@@ -150,6 +153,7 @@ class AutostartTest {
     }
 
     @Nested
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "gerador só roda em Linux; os caminhos POSIX do teste absolutizam como D:\\... no Windows — CI F3")
     @DisplayName("Linux")
     class Linux {
         @Test
