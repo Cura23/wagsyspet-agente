@@ -1,9 +1,6 @@
 package br.com.wagner.wagsyspet.agente.core;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.java_websocket.client.WebSocketClient;
-import org.java_websocket.handshake.ServerHandshake;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,15 +8,10 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -32,13 +24,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ServidorAgenteTest {
 
     private static final String ORIGIN_PWA = "https://wagsyspet-frontend.vercel.app";
-    private static final ObjectMapper JSON = new ObjectMapper();
+    /** Identidade que o agente anuncia: versão do binário, protocolo e o agenteId recebido no pareamento (F3-L0). */
+    static final InfoAgente INFO_TESTE = new InfoAgente("1.2.3", 1, "uid-teste-0001");
 
     private ServidorAgente servidor;
 
     @BeforeEach
     void subir() throws Exception {
-        servidor = new ServidorAgente(0, Set.of(ORIGIN_PWA), new InfoAgente("0.1.0-spike", 1));
+        servidor = new ServidorAgente(0, Set.of(ORIGIN_PWA), INFO_TESTE);
         servidor.iniciar(Duration.ofSeconds(10));
     }
 
@@ -55,7 +48,7 @@ class ServidorAgenteTest {
     }
 
     @Test
-    @DisplayName("Origin do PWA → conecta; hello → hello_ok com versão do agente e protocolo")
+    @DisplayName("Origin do PWA → conecta; hello → hello_ok com versão, protocolo (NÚMERO), so e agenteId (contrato §7.4-1)")
     void originPermitidaRecebeHelloOk() throws Exception {
         ClienteTeste c = ClienteTeste.conectar(servidor.getPort(), Map.of("Origin", ORIGIN_PWA));
         assertThat(c.abriu.await(5, TimeUnit.SECONDS)).as("handshake deve completar").isTrue();
@@ -63,9 +56,26 @@ class ServidorAgenteTest {
         c.send("{\"tipo\":\"hello\",\"versaoProtocolo\":1}");
         JsonNode resposta = c.proximaMensagem();
         assertThat(resposta.get("tipo").asText()).isEqualTo("hello_ok");
-        assertThat(resposta.get("agenteVersao").asText()).isEqualTo("0.1.0-spike");
+        assertThat(resposta.get("agenteVersao").asText()).isEqualTo("1.2.3");
+        // o parser do PWA exige protocolo NUMÉRICO (string → frame descartado → "sem resposta")
+        assertThat(resposta.get("protocolo").isInt()).as("protocolo deve ser número JSON").isTrue();
         assertThat(resposta.get("protocolo").asInt()).isEqualTo(1);
         assertThat(resposta.get("so").asText()).isNotBlank();
+        // agenteId: sem ele o PWA fecha 1000 'desatualizado' e nunca envia auth
+        assertThat(resposta.path("agenteId").isTextual()).as("agenteId deve ser string").isTrue();
+        assertThat(resposta.get("agenteId").asText()).isEqualTo("uid-teste-0001");
+        c.close();
+    }
+
+    @Test
+    @DisplayName("hello com versaoProtocolo desconhecido AINDA responde hello_ok (o PWA decide pelo /release; erro aqui = 'agente não encontrado')")
+    void helloComProtocoloDesconhecidoRespondeHelloOk() throws Exception {
+        ClienteTeste c = ClienteTeste.conectar(servidor.getPort(), Map.of("Origin", ORIGIN_PWA));
+        assertThat(c.abriu.await(5, TimeUnit.SECONDS)).isTrue();
+        c.send("{\"tipo\":\"hello\",\"versaoProtocolo\":99}");
+        JsonNode resposta = c.proximaMensagem();
+        assertThat(resposta.get("tipo").asText()).isEqualTo("hello_ok");
+        assertThat(resposta.get("agenteId").asText()).isEqualTo("uid-teste-0001");
         c.close();
     }
 
@@ -80,16 +90,29 @@ class ServidorAgenteTest {
     }
 
     @Test
-    @DisplayName("mensagem desconhecida → erro tipado, conexão segue aberta")
-    void mensagemDesconhecida() throws Exception {
+    @DisplayName("mensagem desconhecida ANTES do auth → erro NAO_AUTENTICADO + close 1008 (F3 §7.4-1: pré-auth só hello/ping/auth; pós-auth vira TIPO_DESCONHECIDO — ContratoF3Test)")
+    void mensagemDesconhecidaPreAuth() throws Exception {
         ClienteTeste c = ClienteTeste.conectar(servidor.getPort(), Map.of("Origin", ORIGIN_PWA));
         assertThat(c.abriu.await(5, TimeUnit.SECONDS)).isTrue();
         c.send("{\"tipo\":\"formatar_disco\"}");
         JsonNode r = c.proximaMensagem();
         assertThat(r.get("tipo").asText()).isEqualTo("erro");
-        assertThat(r.get("codigo").asText()).isEqualTo("TIPO_DESCONHECIDO");
-        assertThat(c.isOpen()).isTrue();
-        c.close();
+        assertThat(r.get("codigo").asText()).isEqualTo("NAO_AUTENTICADO");
+        assertThat(c.esperarFechar(5)).isTrue();
+        assertThat(c.codigoFechamento.get()).isEqualTo(1008);
+    }
+
+    @Test
+    @DisplayName("host de DEV sem pareamento: auth → erro NAO_PAREADO + close 1008 (nunca autentica sem chave da loja)")
+    void semPareamentoRecusaAuth() throws Exception {
+        ClienteTeste c = ClienteTeste.conectar(servidor.getPort(), Map.of("Origin", ORIGIN_PWA));
+        assertThat(c.abriu.await(5, TimeUnit.SECONDS)).isTrue();
+        c.send("{\"tipo\":\"auth\",\"ticket\":\"v1.x.y\"}");
+        JsonNode r = c.proximaMensagem();
+        assertThat(r.get("codigo").asText()).isEqualTo("NAO_PAREADO");
+        assertThat(c.esperarFechar(5)).isTrue();
+        assertThat(c.codigoFechamento.get()).isEqualTo(1008);
+        assertThat(c.motivoFechamento.get()).isEqualTo("NAO_PAREADO");
     }
 
     @Test
@@ -176,7 +199,7 @@ class ServidorAgenteTest {
     @Test
     @DisplayName("porta já ocupada → iniciar() falha RÁPIDO com a causa (BindException), não espera o timeout")
     void portaOcupadaFalhaRapido() throws Exception {
-        ServidorAgente segundo = new ServidorAgente(servidor.getPort(), Set.of(ORIGIN_PWA), new InfoAgente("x", 1));
+        ServidorAgente segundo = new ServidorAgente(servidor.getPort(), Set.of(ORIGIN_PWA), INFO_TESTE);
         long t0 = System.nanoTime();
         try {
             assertThatThrownBy(() -> segundo.iniciar(Duration.ofSeconds(10)))
@@ -191,7 +214,7 @@ class ServidorAgenteTest {
     @Test
     @DisplayName("erro dentro do onStart (a lib NÃO protege) → iniciar() falha rápido e o servidor é derrubado")
     void erroNoOnStartFalhaRapidoESemOrfao() throws Exception {
-        ServidorAgente quebrado = new ServidorAgente(0, Set.of(ORIGIN_PWA), new InfoAgente("x", 1)) {
+        ServidorAgente quebrado = new ServidorAgente(0, Set.of(ORIGIN_PWA), INFO_TESTE) {
             @Override
             protected void aoIniciar() {
                 throw new IllegalStateException("boom no onStart");
@@ -217,45 +240,5 @@ class ServidorAgenteTest {
     @DisplayName("falhaFatal(): pendente enquanto vivo (o AgenteMain espera nela em vez de join eterno)")
     void falhaFatalPendenteEnquantoVivo() {
         assertThat(servidor.falhaFatal().isDone()).isFalse();
-    }
-
-    /** Cliente Java-WebSocket de teste com headers customizados e fila de mensagens recebidas. */
-    private static final class ClienteTeste extends WebSocketClient {
-        final CountDownLatch abriu = new CountDownLatch(1);
-        final CountDownLatch fechou = new CountDownLatch(1);
-        final BlockingQueue<String> recebidas = new LinkedBlockingQueue<>();
-        final AtomicReference<Integer> codigoFechamento = new AtomicReference<>();
-        final AtomicReference<String> motivoFechamento = new AtomicReference<>("");
-        final AtomicReference<Exception> erro = new AtomicReference<>();
-
-        private ClienteTeste(URI uri, Map<String, String> headers) {
-            super(uri, headers);
-        }
-
-        static ClienteTeste conectar(int porta, Map<String, String> headers) {
-            ClienteTeste c = new ClienteTeste(URI.create("ws://127.0.0.1:" + porta), headers);
-            c.connect();
-            return c;
-        }
-
-        JsonNode proximaMensagem() throws Exception {
-            String m = recebidas.poll(5, TimeUnit.SECONDS);
-            assertThat(m).as("resposta em 5s").isNotNull();
-            return JSON.readTree(m);
-        }
-
-        @Override public void onOpen(ServerHandshake h) { abriu.countDown(); }
-        @Override public void onMessage(String message) { recebidas.add(message); }
-
-        @Override public void onClose(int code, String reason, boolean remote) {
-            codigoFechamento.set(code);
-            motivoFechamento.set(reason == null ? "" : reason);
-            fechou.countDown();
-        }
-
-        @Override public void onError(Exception ex) {
-            erro.set(ex);
-            fechou.countDown();
-        }
     }
 }

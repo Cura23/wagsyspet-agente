@@ -6,7 +6,7 @@
 
     <groupId>br.com.wagner.wagsyspet</groupId>
     <artifactId>wagsyspet-agente</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>${revision}</version>
     <packaging>pom</packaging>
 
     <name>WagSysPet — Agente de Impressão</name>
@@ -23,6 +23,9 @@
     </modules>
 
     <properties>
+        <!-- VERSÃO ÚNICA do binário (plano F3 D1): vai para o MANIFEST (Implementation-Version → hello_ok e /parear) e,
+             sem o sufixo, para o jpackage (app-version). Release: ./mvnw -Drevision=1.2.3 ...  (tag v1.2.3). -->
+        <revision>1.0.0-SNAPSHOT</revision>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -61,6 +64,11 @@
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-simple</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-jdk14</artifactId>
                 <version>${slf4j.version}</version>
             </dependency>
             <dependency>

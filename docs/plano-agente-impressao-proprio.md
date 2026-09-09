@@ -1,7 +1,7 @@
 # Plano — Agente Próprio de Impressão de Cupom (WagSysPet)
 
 > **Status (2026-09-07):** PLANO APROVADO (todas as decisões tomadas — Java 21, repo público, multiplataforma).
-> **F0 em andamento:** spike de fidelidade **PASSOU** (iText ≈ Chrome, fiscal com QR e não-fiscal); spike do caminho
+> **F0 CONCLUÍDO** (PR #1 deste repo, CI verde em ubuntu/windows/macos; próximo = F1 backend). Detalhe dos spikes: spike de fidelidade **PASSOU** (iText ≈ Chrome, fiscal com QR e não-fiscal); spike do caminho
 > Unix **PASSOU em código** (`javax.print` enumera; `lp` + PDF nativo → CUPS → `cups-pdf`, 6/6 verdes).
 > **Windows PROVADO no CI** (runner `windows-latest`: `PrinterJob`+PDFBox → "Microsoft Print to PDF" em porta de
 > arquivo → PDF com `Producer: Microsoft: Print To PDF`, 4/4 rodaram). CI verde em **ubuntu/windows/macos**.
@@ -31,8 +31,8 @@
 > **Este arquivo é o plano canônico — vive no repo do agente.**
 > Gerado em 2026-09-06 a partir de recon multi-agente (6 lentes + 4 contra-provas céticas, fontes primárias
 > de 2026) + verificação pessoal dos achados decisivos. Pré-requisito já feito: **Fase 0** (rate-limit fiscal,
-> código morto, robustez do `imprimirViaIframe`) — commitada e pushada nas branches `worktree-fase0-impressao`
-> dos 2 repos, ainda **não mergeada** na main.
+> código morto, robustez do `imprimirViaIframe`) — **MERGEADA na main dos 2 repos em 2026-09-07** (backend PR #5
+> @848da3ae, frontend PR #2 @4a1a3127; CI da main verde; deploy automático).
 
 ---
 
@@ -354,14 +354,14 @@ CI → deploy). Os instaladores vão para o GitHub Releases pelo CI do repo do a
 
 ## 3. Encaixe no código existente (o que muda, arquivo por arquivo)
 
-### Backend (poucas mudanças; **nenhuma migration em `db/tenant`** — as 3 colunas já existem)
+### Backend — **FEITO no F1 (2026-09-07, worktree `agente-f1`, não commitado)**; DDL inline nos V1 (public + tenant), sem Vx novo. Detalhe do que foi entregue e do adversarial: `wagsyspet-backend/docs/agente-impressao-f1-backend-plano-lotes.md` (repo privado)
 | Arquivo | Mudança |
 |---|---|
 | `dto/ConfiguracaoGeralDTO.java:85-89` | `Boolean agentePareado` **read-only** (ignorado no PUT); `@Size(max=120)` em `impressoraSelecionada` |
 | `service/ConfiguracaoGeralService.java:176-182` | `impressoraSelecionada`: não-null→trim, **isBlank→null** (hoje "null preserva" impede limpar); guard `AGENTE` sem `agentePareado` → `BusinessException` (molde F-08 l.152-169); `toDTO` seta `agentePareado` |
 | `service/ConfiguracaoGeralService.java` (novos) | `@Transactional marcarAgentePareado(versao)` (dentro de `runWithTenant`), `desparear()`, `@Transactional(readOnly) buscarImpressao()` → DTO leve **sem LAZY** (OSIV off) |
 | `controller/ConfiguracaoGeralController.java:77` | **`GET /impressao` com `isAuthenticated()`** (ver §7 — corrige bug pré-existente) → `{modoImpressao, impressoraSelecionada, agentePareado}`; `DELETE /agente-impressao` (RBAC igual l.37) |
-| `controller/AgenteImpressaoController.java` (NOVO, `/api/agente-impressao`) | `GET /versao`, `GET /ticket` (`isAuthenticated()`), `POST /pareamento/token` (RBAC de config). Bucket geral do rate-limit (prefixo não é fiscal) |
+| `controller/AgenteImpressaoController.java` (NOVO, `/api/agente-impressao`) | `GET /ticket?agenteId=` (`isAuthenticated()`; caixa ativo NESTA loja senão 404), `GET /caixas`, `DELETE /{id}`, `POST /pareamento/token` (RBAC de config). Bucket geral do rate-limit (prefixo não é fiscal). Versão/release ficou só no endpoint público |
 | `controller/AgenteImpressaoPublicController.java` (NOVO, `/api/public/agente-impressao`) + `SecurityConfig` (`permitAll` na linha dos outros `/api/public/**`) | `GET /release` (JSON versão/URLs/sha256 — **sem login**, é o que o painel E a página pública consomem) e `GET /download/{so}` (**302** pro asset do GitHub Releases, `no-store`, 404 tipado `AGENTE_SO_DESCONHECIDO`). Sem tenant (o `TenantFilter` já marca `public`). Teste: `BaseSecurityTest` prova 200/302 **sem JWT** e que `/api/agente-impressao/ticket` continua 401 sem JWT |
 | `controller/AgenteImpressaoPublicController.java` (NOVO, `/api/public/agente-impressao`) | `POST /parear`; erro sempre **404 genérico** + `no-store` (molde `PortalContadorPublicController:22-25`); **não ler `X-Tenant-ID`** |
 | `service/impressao/AgenteImpressaoService.java` (NOVO) | `emitirToken()` / `parear()` (CAS + `runWithTenant`) / `emitirTicket()`; `AgenteTicketService` Ed25519 JDK 21 |
@@ -371,13 +371,24 @@ CI → deploy). Os instaladores vão para o GitHub Releases pelo CI do repo do a
 | `dto/ConfiguracaoGeralDTO.java` (complemento) | `agentePareado` passa a ser **derivado** (≥1 agente ativo); adicionar `agentes[]` resumido (`id, nomeMaquina, so, versao, ultimoVisto`) para o painel listar/revogar caixas |
 | `controller/AgenteImpressaoController.java` (complemento) | `DELETE /{id}` revoga **um** caixa (RBAC de config); `GET /ticket` só emite se o `agenteId` informado estiver **ativo** no tenant |
 | `config/SecurityConfig.java:109` | `.requestMatchers("/api/public/agente-impressao/**").permitAll()` **antes** de `anyRequest()` (l.152) |
-| `config/RateLimitFilter.java:79-84` | `"/api/public/agente-impressao"` em `INVITE_PATHS` (bucket auth 10/min·50/h por IP). **Não** tocar `FISCAL_PATHS` |
+| `config/RateLimitFilter.java:79-84` | **Só a rota exata** `"/api/public/agente-impressao/parear"` em `INVITE_PATHS` (o match é `startsWith`; o prefixo jogaria `/release` e `/download` no bucket auth). **Não** tocar `FISCAL_PATHS`. Bônus do adversarial F1: bucket por tenant só com `Authorization` (anônimo com `X-Tenant-ID` forjado drenava a cota da loja vítima — pré-existente) |
 | `AgenteImpressaoPropriedades.java` (NOVO) + `ErrorCode` + `GlobalExceptionHandler` + `application*.properties` | `app.agente-impressao.{versao-atual, versao-minima, protocolo-minimo, token-validade-min, download.url-windows, download.url-linux, download.url-macos-arm64, download.url-macos-x64, sha256.*}` (URLs do **GitHub Releases**, por env no profile railway); `AGENTE_TOKEN_INVALIDO` (404), `AGENTE_VERSAO_OBSOLETA` (426), `AGENTE_NAO_PAREADO` |
 | `pom.xml` (backend) | **Nenhuma dependência nova** (R2/AWS SDK saíram com o repo público; Ed25519 é nativo no JDK 21). Opcional: consumir `agente-protocolo` como dependência para não duplicar mensagens/erros |
 | `application-railway.properties` | `cors.allowed-origins` = fonte da allowlist de `Origin` devolvida no pareamento |
 | Testes | estender `ConfiguracaoGeralModoImpressaoIntegrationTest`/`ControllerTest`; novo `AgenteImpressaoPareamentoIntegrationTest` (`AbstractTenantIntegrationTest`) — inclui **adversarial `X-Tenant-ID` apontando outro tenant** (deve cair no tenant do token) |
 
-### Frontend (gate: `tsc -b` + `lint:ci` teto **131** — folga atual **7 warnings** + vitest)
+### Frontend — **FEITO no F2 (2026-09-09, worktree `wagsyspet-frontend/.claude/worktrees/agente-f2`, branch `worktree-agente-f2`, não commitado)**; gates: `lint:ci` 124/131 (+0), `tsc -b` 0, vitest 3153 verdes, `build` OK. Detalhe, adversarial (44 achados) e contrato F3: `wagsyspet-backend/docs/agente-impressao-f2-frontend-plano-lotes.md` + `docs/recon-f2/` (repo privado)
+
+> **A tabela abaixo é o PLANO; onde diverge, vale o CÓDIGO (resumo em §7.4):** `hello_ok{agenteVersao,protocolo,so,agenteId}` (não `versao`);
+> `OpcoesImpressao` é tipo próprio (`modoImpressao, impressoraSelecionada, agentePareado`); `agenteClient` fecha após **20 s** ocioso (não 60), handshake
+> 3 s / **45 s** quando a permissão LNA está em `prompt`, `hello` **antes** do `auth` (release/ticket entre `hello_ok` e `auth`, ticket pré-buscado quando o
+> `agenteId` já é conhecido), reconexão **1×** na mesma porta se o agente fechar nessa janela ou recusar `EXPIRADO/REPETIDO`; a impressora vive **no agente**
+> (`listar_impressoras` → `selecionada`; `selecionar_impressora{nome}`), erro `ImpressoraNaoDefinida` só **depois** de listar; hooks reais:
+> `useConfiguracaoImpressao/useReleaseAgente/useCaixasPareados/useGerarCodigoPareamento/useRevogarCaixa/useDesparearLoja/useAgenteConexao/
+> useAvisoPromptAgente/useOpcoesImpressao/useImprimirComFallback`; `mensagensImpressao.descreverErroImpressao(err, {host, publico:'operador'|'dono'})` com
+> ações `IMPRIMIR_PELO_NAVEGADOR|CONECTAR_AGENTE|TENTAR_DE_NOVO|…`; `vite.config.ts` **ganhou** `NetworkOnly` para `/api/agente-impressao/ticket`
+> (antes da regra genérica); o código de pareamento vive na **página** (`ConfiguracaoGeral`), some quando aparece um caixa de **id novo** na lista
+> (nunca por `agentePareado`, que esconderia o código do 2º caixa), countdown informativo (não apaga); painel guarda a última verificação (`ultimaInfo`).
 | Arquivo | Mudança |
 |---|---|
 | `services/impressao/tiposImpressao.ts:9-21` | Contrato: `imprimir(html, ctx?: {impressora?}) → Promise<ResultadoImpressao{confirmado, impressora?}>`; `OpcoesImpressao = Pick<ConfiguracaoGeral,'modoImpressao'\|'impressoraSelecionada'>`. DIALOGO/DIRETO devolvem `{confirmado:false}` |
@@ -396,12 +407,19 @@ CI → deploy). Os instaladores vão para o GitHub Releases pelo CI do repo do a
 | `services/impressao/imprimirViaIframe.ts` | **Sem mudança** (o caminho AGENTE usa PDF, não reusa o CSS do iframe) |
 | `vite.config.ts` | **Nenhuma** regra nova (WebSocket não passa pelo Service Worker) |
 
-### Agente (repo **novo, irmão, público** — Java 21 / Maven)
-Módulos: `agente-protocolo` (mensagens Jackson, códigos de erro, verificação de ticket Ed25519 — compartilhável com o
-backend), `agente-core` (servidor Java-WebSocket em 127.0.0.1, Origin/Host/ticket/limites, fila 1 job, pareamento
-`java.net.http`, versão), `agente-impressao` (`javax.print` + PDFBox: lista por nome, imprime PDF 80 mm,
-`PrintJobListener` → estado), `agente-app` (`SystemTray`, autostart por SO, credencial cifrada, flags, `ImpressoraFake`),
-`.github/workflows/release.yml` (jlink + jpackage nos 3 runners; sha256 + `latest.json` assinado).
+### Agente (repo **novo, irmão, público** — Java 21 / Maven) — **FEITO no F3 (2026-09-09, branch `feat/agente-f3-mvp`, não commitado)**
+Módulos como entregues: `agente-protocolo` (mensagens, `ProtocoloVersao.ATUAL=1`, `VerificadorTicket` Ed25519 **byte-idêntico ao do
+backend** + vetores compartilhados, `VerificadorAssinaturaRelease` para o `latest.json`), `agente-core` (`ServidorAgente` Java-WebSocket em
+127.0.0.1 com Origin/Host/ticket/limites/prazos do contrato §7.4, `Sessao`, `FilaImpressao` 1 thread + fila 2 + detecção de motor preso,
+listagem com prazo, `PortaImpressao`, `ConfiguracaoLocalArquivo` (fonte única, relê por mtime), `SubidaComFallback` 28421→28422,
+`VersaoDoBinario` do MANIFEST, `pareamento/` = `DiretoriosDoAgente`, `CofreCredencial` AES-256-GCM 0600, `IdentidadeDaMaquina`,
+`ClientePareamento` HTTP/1.1 com aviso de relógio pelo header `Date`), `agente-impressao` (`ImpressoraCupsLp` via `lp` com prazo real,
+`ImpressoraJavaxPrint` PrinterJob+PDFBox, `AquecedorPdfBox` com fontcache na pasta do agente), `agente-app` (`Main`/`Argumentos`/
+`LogDoAgente`/`TravaDeInstancia`, `AgenteDesktop` orquestrador com zelador do cofre e re-subida 3/10/30 s, `Diagnostico` com relógio × servidor,
+`ComandosPareamento`/`ComandosAutostart`, `ui/` bandeja AWT ou janela Swing com `erroFatal` bloqueante, `autostart/` HKCU Run / LaunchAgent /
+systemd --user + `.desktop`, `ChaveDeRelease`), `ci.yml` reutilizável (ubuntu-22.04 / windows / macos, smoke do binário imprimindo,
+autostart, codesign) e `release.yml` por tag (4 runners incl. `macos-15-intel`, `SHA256SUMS`, `latest.json` + `.sig`, envs do Railway no resumo).
+Detalhe lote a lote, decisões D1–D25 e a tabela do adversarial: `wagsyspet-backend/docs/agente-impressao-f3-agente-plano-lotes.md` (repo privado).
 
 ---
 
@@ -412,10 +430,10 @@ backend), `agente-core` (servidor Java-WebSocket em 127.0.0.1, Origin/Host/ticke
 | # | Fase | Tam. | Entregas | DoD (Definition of Done) |
 |---|---|---|---|---|
 | **F0** | **Spikes** (sem código de produto; **sem hardware**) | P | (a) esqueleto Maven multi-módulo (`agente-protocolo/core/impressao/app`) + JUnit 5, no Linux; (b) **spike de impressão no Linux:** PDF do backend → PDFBox → `javax.print` → **`cups-pdf`** em 80 mm — **fidelidade do iText** (DANFCe fiscal + não-fiscal), `Paper` custom vs "papel do driver", `PrintJobListener`, fila offline (`cupsdisable`), nome inexistente → `IMPRESSORA_INDISPONIVEL`; **decide o plano B** (headless) se a fidelidade não bastar; (c) **spike Windows (VM, se houver):** **mesmo jar** → "Microsoft Print to PDF"; (d) **spike `ws://127.0.0.1` + LNA** em Chrome/Edge/Firefox — **capturar textos pt-BR** dos prompts/telas de reset (Java-WebSocket no Linux); (e) **Ed25519 Java↔Java:** backend assina, agente verifica; (f) `jpackage`+`jlink` smoke no CI (3 runners) | Relatório de spike com veredito por item; PDFs de 80 mm gerados no `cups-pdf` (layout conferido); decisão fidelidade/plano B. Checkpoint de **térmica real** fica no F3 (loja-piloto) |
-| **F1** | **Backend mínimo** | P/M | Tudo de §3-Backend: `agentePareado` read-only, limpar impressora, guard AGENTE, **`GET /impressao` leve**, `AgenteImpressaoController` (+ público `parear`), tabela public `agente_impressao_token`, ticket Ed25519, props, ErrorCodes, rate-limit/SecurityConfig | Testes de integração verdes incl. **adversarial `X-Tenant-ID`**; `validar-baseline.sh` ok; adversarial workflow aprovado |
-| **F2** | **Frontend** | M | Tudo de §3-Frontend: contrato `ResultadoImpressao`, `agenteClient/estrategiaAgente/mensagens`, hooks, `AgenteImpressaoPanel`, call-sites com toast real + ação fallback, hook `/impressao` no PDV, rádio AGENTE habilitado | `tsc -b` limpo; `lint:ci ≤131`; vitest verde (novos testes com FakeSocket); adversarial aprovado; **sem agente ainda funciona igual a hoje** |
-| **F3** | **Agente Java multiplataforma MVP** | G | Repo novo (§2.3): `agente-protocolo` (compartilhável c/ backend), `agente-core` (Java-WebSocket 127.0.0.1, 3 barreiras, `hello/auth/listar/imprimir/ping`, fila 1 job, pareamento, versão), `agente-impressao` (`javax.print` + PDFBox: lista por nome, PDF 80 mm, "papel do driver" default / `Paper` opt-in, `PrintJobListener` → estado), `agente-app` (`SystemTray`, autostart HKCU Run/LaunchAgent/systemd, credencial AES-GCM 0600, `--instalar/--desinstalar`). CI: jlink + jpackage nos 3 runners → `.exe` per-user, `.dmg` ad-hoc, `.deb`/tar + sha256 + `latest.json` assinado | **Um só código** imprimindo nos 3 SOs. **Linux:** validado na **máquina do dono** (`cups-pdf`; térmica real quando houver). **Windows:** validado em VM/PC ("Print to PDF") + **checkpoint em térmica real na loja-piloto** (≥3 marcas: `ACEITO_SPOOLER`, papel/corte). **macOS:** construído e assinado ad-hoc, sai **BETA** (o dono não tem Mac). Ticket inválido/Origin/Host errados **recusados** (JUnit). Adversarial aprovado |
-| **F4** | **Distribuição + endurecimento** | M | `GET /api/public/agente-impressao/release` + `/download/{so}` (**públicos**, `permitAll`) devolvendo as URLs do **GitHub Releases** (props/env) + sha256; **página pública `app.agroease.com.br/agente`** (rota fora do login) com detecção de SO, botões de download, sha256 e instruções permanentes **por SO** (Edge/SmartScreen/SAC/Defender; macOS "Abrir Mesmo Assim"; Linux `.deb`) + aviso "peça o código de pareamento ao responsável"; o painel logado reusa o mesmo endpoint; submissão ao Defender por release; **versão mínima bloqueante** no PWA; painel de **caixas pareados** (listar/revogar por máquina — a tabela `agente_impressao` já vem da F1) | Instalação do zero numa máquina limpa Win10, Win11 e Linux seguindo só a página; bloqueio por versão testado; revogar um caixa corta os tickets dele |
+| **F1** | **Backend mínimo** — ✅ **FEITO 2026-09-07** (worktree `agente-f1` do backend, **não commitado**) | P/M | Tudo de §3-Backend **+ o que era do F4 no backend**: `release`/`download/{so}` públicos, `GET /caixas` + `DELETE /{id}`, desparear a loja, health com avisos. 221 casos verdes (20 classes); adversarial workflow: 13 confirmados corrigidos (1 ALTA pré-existente no rate limit), 1 refutado — §7.3 | Testes de integração verdes incl. **adversarial `X-Tenant-ID`** ✅; golden regenerado ✅; adversarial workflow ✅ |
+| **F2** | **Frontend** — ✅ **FEITO 2026-09-09** (worktree `agente-f2` do frontend, **não commitado**) | M | Tudo de §3-Frontend (L1–L6) **+ o que era do F4 no front** (página pública `/agente`, painel de caixas pareados com revogar/desparear, versão mínima bloqueante, KB): contrato `ResultadoImpressao`, `agenteClient` (LNA, portas, ticket, fila) + `FakeSocket`, `estrategiaAgente`, bifurcação HTML×PDF na fachada, `mensagensImpressao` (operador × dono), hooks, 7 call-sites com toast + "Imprimir pelo navegador", `AgenteImpressaoPanel`, rádio AGENTE habilitado. Adversarial: 44 achados (2 ALTA) corrigidos/registrados — §7.4 | `tsc -b` 0 ✅; `lint:ci` 124/131 ✅; vitest 3153 ✅ (34 casos do cliente com FakeSocket); `build` ✅; adversarial ✅; **sem agente funciona igual a hoje** (todo agente F0 é tratado como "desatualizado" até o F3) |
+| **F3** | **Agente Java multiplataforma MVP** — ✅ **CÓDIGO FEITO 2026-09-09** (branch `feat/agente-f3-mvp`, **não commitado**; falta o teste manual real e a 1ª tag) | G | Repo novo (§2.3): `agente-protocolo` (compartilhável c/ backend), `agente-core` (Java-WebSocket 127.0.0.1, 3 barreiras, `hello/auth/listar/imprimir/ping`, fila 1 job, pareamento, versão), `agente-impressao` (`javax.print` + PDFBox: lista por nome, PDF 80 mm, "papel do driver" default / `Paper` opt-in, `PrintJobListener` → estado), `agente-app` (`SystemTray`, autostart HKCU Run/LaunchAgent/systemd, credencial AES-GCM 0600, `--instalar/--desinstalar`). CI: jlink + jpackage nos 3 runners → `.exe` per-user, `.dmg` ad-hoc, `.deb`/tar + sha256 + `latest.json` assinado | **Um só código** imprimindo nos 3 SOs. **Linux:** validado na **máquina do dono** (`cups-pdf`; térmica real quando houver). **Windows:** validado em VM/PC ("Print to PDF") + **checkpoint em térmica real na loja-piloto** (≥3 marcas: `ACEITO_SPOOLER`, papel/corte). **macOS:** construído e assinado ad-hoc, sai **BETA** (o dono não tem Mac). Ticket inválido/Origin/Host errados **recusados** (JUnit). Adversarial aprovado. **Estado:** 261 casos verdes por XML (protocolo 80, impressão 31, core 127, app 23); L0–L6 ✅; adversarial 5 lentes ✅ (§7.5); Linux validado na máquina do dono contra o `cups-pdf` (`ImpressaoRealEnvTest` + smokes); Windows/macOS só pelo CI até a 1ª release; **pendente:** roteiro manual PDV real → agente (doc privado), passo manual do ambiente `release` no GitHub, tag `v1.0.0` |
+| **F4** | **Distribuição + endurecimento** (encolhida) | P/M | ~~`release` + `/download/{so}`~~ (**F1**); ~~página pública `/agente`, versão mínima bloqueante no PWA, painel de caixas pareados~~ (**F2**). Resta: preencher as envs `AGENTE_URL_*`/`AGENTE_SHA256_*` por release; submissão ao Defender por release; conferir os textos da página `/agente` contra os prompts REAIS do SmartScreen/Gatekeeper na 1ª release | Instalação do zero numa máquina limpa Win10, Win11 e Linux seguindo só a página; bloqueio por versão testado ponta a ponta; revogar um caixa corta os tickets dele |
 | **F5** | **Validações remanescentes + Safari** | M | **macOS em hardware real** (sai do beta); **contingência CA por máquina + `wss://` (folha ≤825 d)** só se houver loja em **Safari**; **plano B de fidelidade** (Chrome/Edge headless → PDF) só se o spike do F0 mostrar que o iText não basta. Windows 7/8.1 **fora** (JDK 21 exige Win10+) — documentar | Mac instala e imprime validado; Safari (se houver) conecta sem aviso |
 | **F6** | **Self-update + extras** | G | Self-update rename-swap verificando `latest.json` Ed25519 (chave de release separada); `PRINTED` via `GetJob/EnumJobs`; raw ESC/POS **não-fiscal** (gaveta/corte); ícone de bandeja | Update de vX→vY sem intervenção; rollback testado |
 | — | **Deferido (fora do plano)** | — | Cupom **não-fiscal offline** (venda offline não tem id; HTML só existe no backend — builder no front duplicaria a verdade); iPad/Safari via LAN | — |
@@ -489,8 +507,11 @@ todos os módulos sempre; impressão virtual à parte — o reator fail-fast esc
   com canal pré-bindado não aceita `drafts`). Regra: **nunca fazer retry em processo** criando instância nova (a
   instância não é reiniciável); em porta ocupada o processo **sai ≠ 0** e o supervisor do SO (serviço Windows /
   systemd / launchd) reinicia com backoff — é o mesmo caminho do watchdog.
-- **3ª barreira = ticket Ed25519 como 1ª mensagem**, com prazo curto pra recebê-lo (fechar 1008 se não vier em N s) e
-  `hello_ok` só depois do ticket. Hoje `hello/ping` respondem pré-auth (sem efeito; `so` já é público via UA).
+- **3ª barreira = ticket Ed25519 via `auth`, mas DEPOIS do `hello`** (decisão do F2, 2026-09-07/09 — substitui o "ticket como
+  1ª mensagem"): `hello` continua pré-auth e `hello_ok` carrega `agenteId` (UID público, inútil sem o JWT da loja) — o PWA precisa
+  dele para pedir o ticket na 1ª conexão da máquina. Antes do `auth` o agente aceita só `hello`/`ping`; qualquer outro tipo →
+  `erro` + `close 1008`. **Prazo do `auth`: ≥ 60 s contados do `hello_ok`** (o cliente pode fazer `GET /release` + `GET /ticket`,
+  cada um com axios 45 s no cold start do Railway; 30 s não cobre). Detalhe completo do contrato em §7.4.
 - **Teto de frame vale PRÉ-auth** (camada WS, antes do ticket) — já é assim; manter ao trocar de draft/lib.
 - **Recusa é 404, não 403** (hardcoded na lib) — só cosmético; não gastar tempo.
 - `estaEscutando()` faz conexão TCP crua: a lib **não** chama `onOpen/onClose` para conexão sem handshake (conn nunca
@@ -531,6 +552,81 @@ e tamanho de número.
   pareamento com ACL do usuário (0600) + fingerprint SHA-256 da chave, valida `exigirPublicaUtilizavel` ao carregar e
   prevê `kid` pra rotação. A chave do ticket assina **só tickets** (o `latest.json` do auto-update usa outro par).
 - No F3 o `onMessage` fecha a conexão (1008) no 1º ticket inválido e não verifica de novo — evita gastar 0,5 ms por lixo.
+
+### 7.3 Adversarial F1 do backend (2026-09-07, workflow 6 lentes + refutação) — resumo; tabela completa no doc privado
+
+**13 confirmados, todos corrigidos com teste (RED antes):** (ALTA, pré-existente) anônimo com `X-Tenant-ID` forjado drenava
+o bucket geral da loja vítima → bucket por tenant só com `Authorization`; health DOWN por URL de download ausente derrubava
+`/actuator/health` em dev/CI → avisos, DOWN só em produção sem chave; `save()` da entidade desfazia revogação concorrente
+(lost update) → UPDATEs dirigidos `… WHERE revogado_em IS NULL`; guard "AGENTE só se pareado" travava a tela da loja que
+perdeu o último caixa → guard só na transição; TTL do ticket sem clamp (1440 min gerava ticket que o agente recusa) → 1..60;
+`versao-minima` inválida → 503 e versão ilegível do cliente → 426, ambos **antes** de gastar o código; chave lida depois do
+CAS → antes; `parear()` ganhou `Propagation.NEVER`; CR/LF em `hostname` forjava log → `@Pattern`; URL de download com
+espaço/`http://` → trim + só https com host; origins sem filtro → só `https://` ou `http://localhost`; teste do "expirado"
+não exercitava o ramo do CAS → reordenado; par de chaves inválido fora de produção caía em efêmero silencioso → aviso.
+**Refutado:** "`runWithTenant` vaza o schema" — restaura o anterior em `finally` (verificado).
+
+**Para o deploy (Railway):** `AGENTE_TICKET_CHAVE_PRIVADA` + `AGENTE_TICKET_CHAVE_PUBLICA` (Ed25519; sem elas `/parear` e
+`/ticket` → 503 e health DOWN), `AGENTE_ORIGENS_PERMITIDAS` **não precisa** (default = `cors.allowed-origins`, que já tem o endereço do Vercel **e** `app.agroease.com.br` — o PWA é servido pelos dois, o agente aceita os dois), `AGENTE_URL_*` + `AGENTE_SHA256_*`
+do GitHub Releases. Banco de produção precisa ser recriado (DDL entrou inline nos V1 — gate já conhecido do go-live).
+
+**Herdado pro F3 (agente):** `ORIGINS_PADRAO` do host de dev não tem `app.agroease.com.br` — passa a vir da resposta do
+pareamento (`origensPermitidas`); o `hello_ok` ganha `agenteId`; `auth` com o ticket do `GET /ticket`.
+
+### 7.4 Adversarial F2 do frontend (2026-09-09, workflow 5 lentes + 1 cético por achado) — resumo; **CONTRATO que a F3 tem de cumprir**
+
+**44 achados (2 ALTA, 29 MÉDIA, 13 BAIXA), 0 refutados; 29 correções com teste, 4 dívidas registradas** (tabela no doc privado).
+As 2 ALTA: resposta de tipo inesperado do agente deixava a Promise pendente para sempre e travava a fila do cliente (o
+`reject` não alcançava o wrapper — só reproduzível com entrega **assíncrona** da mensagem, como no navegador); e a loja
+já pareada nunca via o código do 2º caixa (a tela escondia o código por `agentePareado`). Lição de custo: 49 agentes =
+38 % do limite mensal do plano — adversarial passa a ter **teto ~10 agentes** (5 lentes + 1 cético por lente).
+
+**O cliente F2 é a verdade do protocolo. O agente F3 precisa (tudo com JUnit no `agente-core`):**
+1. `open` → PWA envia `{tipo:'hello', versaoProtocolo:1}` e espera `hello_ok{agenteVersao, protocolo:<número JSON>, so, agenteId}` em **3 s**
+   (45 s se a permissão LNA estiver em `prompt`). `protocolo` como **string** → o parser devolve `null` → "sem resposta". Com `versaoProtocolo`
+   desconhecido o agente **ainda responde `hello_ok`** (o PWA compara com `protocoloMinimo` do `/release`); responder `erro`+`close` vira
+   `RECUSADO` → PWA tenta a 2ª porta → "agente não encontrado".
+2. PWA valida `agenteId` (string obrigatória), `agenteVersao ≥ versaoMinima`, `protocolo ≥ protocoloMinimo` — se falhar, `close 1000 'desatualizado'` e
+   **nunca** envia `auth`. Agente F0 (`0.1.0-spike`, sem `agenteId`) é "desatualizado" por definição.
+3. `auth{ticket}` → `auth_ok{}` (PWA espera **10 s**) ou `erro{codigo:'TICKET_INVALIDO', motivo:<Motivo de TicketInvalidoException>, mensagem}` **antes** do
+   `close 1008`. `EXPIRADO|REPETIDO` → PWA busca ticket novo e reconecta **1×** na mesma porta; `LOJA_DIVERGENTE|AGENTE_DIVERGENTE` → "caixa não pareado";
+   `TIPO_DESCONHECIDO` no `auth` → "desatualizado". Só `close` sem frame `erro` → PWA lê o `reason` como motivo (sem renovação).
+   **Prazo do agente para o `auth`: ≥ 60 s do `hello_ok`** (ver §7.1). Se fechar nessa janela, o PWA reconecta 1× já com o ticket em mão.
+4. Pós-auth: `listar_impressoras{id}` → `impressoras{id, nomes[], selecionada|null}`; `selecionar_impressora{id, nome}` → `selecionar_impressora_ok{id, selecionada}`
+   (persistida no agente, por máquina); `imprimir{id, formato:'pdf', bytesBase64, impressora}` (**sempre** com `impressora`) → `imprimir_ok{id, estado:'ACEITO_SPOOLER'}`
+   | `imprimir_erro{id, codigo:'IMPRESSORA_INDISPONIVEL'|'ERRO', mensagem}`; `erro{id?, codigo, mensagem}` **ecoa `id`** quando a entrada tinha (sem `id`,
+   o PWA rejeita o único job em voo — ele serializa 1 job). Timeouts do PWA: listar 5 s, imprimir 15 s. PDF ≤ 2 MiB (base64 dentro do frame de 4 MiB).
+5. **OCUPADO** (2ª conexão autenticada da mesma Origin com uma viva): sinalizar **depois** do handshake WS — `erro{codigo:'OCUPADO'}` + `close 1008` com
+   `reason 'OCUPADO'` (no `auth` ou depois). Recusar no upgrade HTTP = `RECUSADO` → PWA tenta a 2ª porta. Qualquer outro `close 1008` durante um job o PWA
+   trata como "fechado" (ex.: caixa revogado), **não** como "outra aba".
+6. O PWA fecha `1000` com reasons `timeout|desatualizado|sem ticket|auth|ocioso|fechado pelo PWA`; **ocioso = 20 s** sem job (a 1ª conexão libera a vaga
+   para a 2ª aba); `pagehide` fecha. Não há loop de reconexão no PWA.
+7. Portas **fixas** `28421` (padrão) → `28422` (fallback), nessa ordem; o PWA **não lê** `portaSugerida` do backend. Origins = `origensPermitidas` do
+   pareamento (inclui `app.agroease.com.br` e o host do Vercel), substituindo `ORIGINS_PADRAO`. `agenteVersao` do binário = versão do instalador (≥ 1.0.0).
+8. Divergências só documentais já absorvidas em §3/§7.1 (ordem `hello→auth`, `agenteVersao`, ocioso 20 s, impressora no agente, PDF baixado ANTES de abrir o socket,
+   versão/protocolo validados ANTES do `auth`). O `roteiroF3` de `src/test/FakeSocket.ts` (frontend) materializa exatamente este contrato — é o oráculo do F3.
+
+### 7.5 Adversarial F3 do agente (2026-09-09, workflow de **5 lentes SEM céticos** — 5 agentes; reverificação pessoal de cada achado) — resumo; tabela completa no doc privado
+Lentes: contrato × cliente (`roteiroF3` do PWA), concorrência/recursos, pareamento/credencial/segurança, casca/SO/UI/autostart, release/CI/build.
+25 achados (2 ALTA), todos tratados em 5 passes com teste; nenhum refutado — o formato "≤5 por lente, sem céticos" achou o mesmo que os
+workflows grandes das fases anteriores por ~1/5 do custo.
+1. **ALTA — split-brain do `config.json`**: bandeja e servidor tinham caches distintas; a impressora escolhida na janela não chegava ao `imprimir`.
+   Fix: `ConfiguracaoLocalArquivo` relê por mtime em toda leitura e o orquestrador injeta a **mesma** instância no servidor; teste ponta a ponta (WS + ticket real).
+2. **ALTA (release) — nomes de asset divergentes** entre `ci.yml` (sem `-rc1`) e `montar-latest.sh` (com): a 1ª pré-release morreria no `publicar`. Fix: nome completo no CI.
+3. Contrato: lista vazia zerava a `selecionada`; listagem sem prazo; OCUPADO concorrente gastava o ticket do perdedor; lacunas do `ContratoF3Test`
+   (peer morto, teto de 8 conexões → 1013 `LIMITE_CONEXOES`, frames fragmentados/limite inclusivo, hello/auth repetidos). Tudo com caso novo.
+4. Concorrência: motor de impressão preso (job > 10× o prazo) agora responde `imprimir_erro` na hora em vez de aceitar para sempre; CLI que mexe no cofre
+   com o agente aberto é aplicada pelo **zelador** em ≤ 5 s; `parear`/`desparear` serializados; erro fatal com UI é **bloqueante** e sai 0 (o launchd
+   não entra em loop); sem supervisor (Windows Run) o processo **re-sobe sozinho** (3/10/30 s) antes de desistir com 3.
+5. Pareamento: erro de leitura do cofre não destrói mais um `pareamento.enc` válido; "código continua válido" só quando é verdade (consumido/timeout → não);
+   **relógio do caixa** (≥ 50 min atrasado → `VALIDADE_ABSURDA`, ≥ 10 min adiantado → `EXPIRADO`) passou a ser **diagnosticado** (aviso no `--parear` e no
+   `--diagnostico` pelo header `Date`; dica "confira a data/hora" no `erro` que chega ao PWA) — o `VerificadorTicket` em si **não mudou** (contrato
+   compartilhado com o backend; rever o teto de 1 h é decisão cross-repo da F6).
+6. Casca/SO: macOS sem Dock (`apple.awt.UIElement`) + `QuitHandler` (⌘Q não mata); autostart ativado com o agente aberto não lança 2ª instância.
+7. Release/CI: `MSYS_NO_PATHCONV` no `reg query`; runner **ubuntu-22.04** + guarda anti-`t64` no `.deb`; dispatch de release só a partir da tag;
+   `codesign --verify` com dentes (inclusive dentro do `.dmg`); `inputs.tag` via `env`; protocolo do `latest.json` lido de `ProtocoloVersao.ATUAL`.
+Dívidas registradas (F6/loja-piloto): código de pareamento no `argv`, proxy explícito da loja, cache de replay zera no re-parear, `tar.gz` Linux
+genérico, MSI com mesma `ProductVersion` para rc/final, `macos-15-intel` é o último runner x86_64 (ago/2027).
 
 ---
 

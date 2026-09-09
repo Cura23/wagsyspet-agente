@@ -1,0 +1,18 @@
+# Atualizações de dependências (Maven) e das actions do CI — PRs semanais, agrupadas, no repo público (Actions grátis).
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      maven:
+        patterns: ['*']
+    commit-message:
+      prefix: 'build(deps)'
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: 'ci(deps)'
