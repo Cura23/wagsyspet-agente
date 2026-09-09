@@ -129,7 +129,7 @@ class ServidorAgenteTest {
     }
 
     @Test
-    @DisplayName("frame acima do teto (4 MB) → conexão fechada (1009), servidor SEGUE VIVO; abaixo do teto passa")
+    @DisplayName("frame acima do teto (4 MB) → conexão fechada (1009; cliente pode ver 1006), nada processado, servidor SEGUE VIVO; abaixo do teto passa")
     void tetoDeFrameProtegeAMemoria() throws Exception {
         // Abaixo do teto: 1 MB de JSON válido é processado normalmente.
         ClienteTeste ok = ClienteTeste.conectar(servidor.getPort(), Map.of("Origin", ORIGIN_PWA));
@@ -143,7 +143,10 @@ class ServidorAgenteTest {
         assertThat(grande.abriu.await(5, TimeUnit.SECONDS)).isTrue();
         grande.send("{\"tipo\":\"ping\",\"lastro\":\"" + "x".repeat(5 * 1024 * 1024) + "\"}");
         assertThat(grande.fechou.await(10, TimeUnit.SECONDS)).as("conexão deve ser fechada").isTrue();
-        assertThat(grande.codigoFechamento.get()).as("close code TOOBIG").isEqualTo(1009);
+        // O servidor manda close 1009 (TOOBIG) assim que lê o tamanho no cabeçalho e derruba o socket; se o cliente ainda estiver
+        // escrevendo os 5 MB nesse instante, o lado dele vê a queda (1006) antes de ler o frame de close. O que importa ao PWA:
+        // fechou, nada foi processado, servidor vivo. (CI ubuntu viu 1006 uma vez em ~10 rodadas.)
+        assertThat(grande.codigoFechamento.get()).as("close TOOBIG (1009) ou queda vista pelo cliente ainda escrevendo (1006)").isIn(1009, 1006);
         assertThat(grande.recebidas).isEmpty();
 
         // O servidor continua servindo outras conexões.

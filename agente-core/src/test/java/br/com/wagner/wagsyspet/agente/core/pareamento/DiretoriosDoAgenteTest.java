@@ -52,8 +52,12 @@ class DiretoriosDoAgenteTest {
     @Test
     @DisplayName("AGROEASE_AGENTE_DIR (env) manda em qualquer SO — suporte/teste apontam para outra pasta")
     void override() {
-        DiretoriosDoAgente d = DiretoriosDoAgente.resolver(Map.of("AGROEASE_AGENTE_DIR", "/srv/agente-x"), props("Windows 11", "C:\\x"));
-        assertThat(d.raiz()).isEqualTo(Path.of("/srv/agente-x"));
+        // caminho absoluto NO SO que roda o teste: um POSIX "/srv/x" no Windows ganharia a unidade atual (D:\srv\x) — CI F3
+        Path alvo = Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().resolve("agente-x");
+        DiretoriosDoAgente d = DiretoriosDoAgente.resolver(Map.of("AGROEASE_AGENTE_DIR", alvo.toString()), props("Windows 11", "C:\\x"));
+        assertThat(d.raiz()).isEqualTo(alvo.normalize());
+        // e um relativo vira absoluto (o agente grava sempre num lugar previsível)
+        assertThat(DiretoriosDoAgente.resolver(Map.of("AGROEASE_AGENTE_DIR", "rel-x"), props("Linux", "/h")).raiz().isAbsolute()).isTrue();
     }
 
     @Test
