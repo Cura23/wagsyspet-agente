@@ -30,13 +30,13 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <pdfbox.version>3.0.5</pdfbox.version>
+        <pdfbox.version>3.0.8</pdfbox.version>
         <java-websocket.version>1.6.0</java-websocket.version>
-        <jackson.version>2.19.2</jackson.version>
-        <slf4j.version>2.0.17</slf4j.version>
-        <junit.version>5.11.4</junit.version>
-        <assertj.version>3.27.3</assertj.version>
-        <surefire.version>3.5.2</surefire.version>
+        <jackson.version>2.22.2</jackson.version>
+        <slf4j.version>2.0.19</slf4j.version>
+        <junit.version>6.1.3</junit.version>
+        <assertj.version>3.27.7</assertj.version>
+        <surefire.version>3.6.0</surefire.version>
     </properties>
 
     <dependencyManagement>
