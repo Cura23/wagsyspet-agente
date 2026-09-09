@@ -201,7 +201,7 @@ jobs:
 
       - name: Evidência — PDFs gerados pela impressora virtual
         if: always() && runner.os != 'macOS'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: impressao-${{ matrix.os }}
           path: |
@@ -241,7 +241,7 @@ jobs:
 
       - name: Evidência — instalador gerado pelo jpackage
         if: always() && steps.empacotar.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: instalador-${{ matrix.os }}
           path: |
