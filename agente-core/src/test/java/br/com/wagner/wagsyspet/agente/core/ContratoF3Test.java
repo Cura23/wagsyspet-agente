@@ -558,7 +558,7 @@ class ContratoF3Test {
     @DisplayName("10. fila de impressão não bloqueia o servidor")
     class Fila {
         @Test
-        @DisplayName("job TRAVADO no motor: ping da mesma conexão e hello de OUTRA conexão respondem; após o timeout interno → imprimir_erro{ERRO}; fila cheia → imprimir_erro imediato")
+        @DisplayName("job TRAVADO no motor: ping da mesma conexão e hello de OUTRA conexão respondem; após o timeout interno → imprimir_erro{ERRO}; com o motor ainda preso, fila cheia → imprimir_erro imediato; solto → os da fila imprimem")
         void jobTravadoNaoTravaServidor() throws Exception {
             CountDownLatch trinco = new CountDownLatch(1);
             CountDownLatch entrou = new CountDownLatch(1);
@@ -577,7 +577,17 @@ class ContratoF3Test {
                 assertThat(outra.proximaMensagem().get("tipo").asText()).isEqualTo("hello_ok");
                 outra.close();
 
-                // fila: 1 executando + 2 esperando; o 4º é recusado na hora
+                // timeout interno (1,5 s no teste; 12 s em produção) → erro para t1 SEM esperar o motor soltar
+                JsonNode t1 = c.proximaMensagem(5);
+                assertThat(t1.get("tipo").asText()).isEqualTo("imprimir_erro");
+                assertThat(t1.get("id").asText()).isEqualTo("t1");
+                assertThat(t1.get("codigo").asText()).isEqualTo("ERRO");
+                assertThat(t1.get("mensagem").asText()).containsIgnoringCase("não respondeu");
+
+                // fila: t1 AINDA ocupa a thread (motor preso) + 2 esperando; o 4º é recusado na hora. Entram só agora, DEPOIS do
+                // timeout de t1: o prazo conta da submissão (é o que o PWA espera), então submetê-los junto com t1 fazia o prazo
+                // deles vencer junto com o de t1 — corrida que o runner macOS do CI perdeu (imprimir_erro em t2). Assim t2/t3
+                // têm o prazo inteiro (1,5 s) para rodar depois que o motor solta, e o job falso conclui em milissegundos.
                 c.send(json("tipo", "imprimir", "id", "t2", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF"));
                 c.send(json("tipo", "imprimir", "id", "t3", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF"));
                 c.send(json("tipo", "imprimir", "id", "t4", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF"));
@@ -586,13 +596,6 @@ class ContratoF3Test {
                 assertThat(cheia.get("id").asText()).isEqualTo("t4");
                 assertThat(cheia.get("codigo").asText()).isEqualTo("ERRO");
                 assertThat(cheia.get("mensagem").asText()).containsIgnoringCase("ocupado");
-
-                // timeout interno (1,5 s no teste; 12 s em produção) → erro para t1 SEM esperar o motor soltar
-                JsonNode t1 = c.proximaMensagem(5);
-                assertThat(t1.get("tipo").asText()).isEqualTo("imprimir_erro");
-                assertThat(t1.get("id").asText()).isEqualTo("t1");
-                assertThat(t1.get("codigo").asText()).isEqualTo("ERRO");
-                assertThat(t1.get("mensagem").asText()).containsIgnoringCase("não respondeu");
 
                 trinco.countDown(); // o motor solta: t1 termina tarde (só log), t2 e t3 rodam
                 impressao.trinco.set(null);

@@ -94,7 +94,8 @@ jobs:
         if: always() && env.IMPRESSORA_VIRTUAL != ''
         shell: bash
         run: |
-          ./mvnw -B -ntp $REVISAO_ARG -pl agente-impressao,agente-core test -Djava.awt.headless=true -Dsun.java2d.print.polling=false \
+          # -am: agente-core depende de agente-protocolo (F3-L0) e o passo 1 não instala nada no repositório local
+          ./mvnw -B -ntp $REVISAO_ARG -pl agente-impressao,agente-core -am test -Djava.awt.headless=true -Dsun.java2d.print.polling=false \
             "-Dimpressora.virtual=${IMPRESSORA_VIRTUAL}" "-Dimpressao.saida=${IMPRESSAO_SAIDA}"
 
       # ── Empacotamento: o MESMO código dos testes vira o binário que a loja instala (jlink + jpackage) ─────────────

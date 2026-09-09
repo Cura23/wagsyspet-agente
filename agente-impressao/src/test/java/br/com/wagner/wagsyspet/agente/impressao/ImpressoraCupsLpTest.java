@@ -2,6 +2,8 @@ package br.com.wagner.wagsyspet.agente.impressao;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 import java.time.Duration;
 import java.util.List;
@@ -53,6 +55,7 @@ class ImpressoraCupsLpTest {
     }
 
     @Test
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "executa /bin/sh; o caminho CUPS/lp não existe no Windows (lá o motor é o PrinterJob) — CI F3")
     @DisplayName("execução: processo que NÃO termina no prazo → ERRO 'não respondeu' (prazo real, sem bloquear no stdout)")
     void prazoDoProcesso() {
         // um 'lp' falso que segura o stdout aberto e não sai — antes do fix o readAllBytes travava para sempre
@@ -62,6 +65,7 @@ class ImpressoraCupsLpTest {
     }
 
     @Test
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "executa /bin/sh; o caminho CUPS/lp não existe no Windows (lá o motor é o PrinterJob) — CI F3")
     @DisplayName("execução: processo que responde → interpretado normalmente (saída lida depois do término)")
     void execucaoFeliz() {
         var r = ImpressoraCupsLp.executar(List.of("/bin/sh", "-c", "echo 'request id is X-7 (1 file(s))'"), Duration.ofSeconds(5), "X", "j", ModoPapel.PAPEL_DO_DRIVER);
