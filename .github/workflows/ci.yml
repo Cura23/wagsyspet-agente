@@ -241,7 +241,8 @@ jobs:
             # F6 D1: app-image relocável em tar.gz — instalação por usuário (~/.local) sem root, é o formato que se AUTO-ATUALIZA
             # no Linux (o .deb em /opt exige senha; fica como "avisar + 1 clique"). Mesmo conteúdo que o CI acabou de testar.
             tar -C "$DIST" -czf "$DIST/$NOME-$V-$SO-$ARCH.tar.gz" "$NOME"
-            tar -tzf "$DIST/$NOME-$V-$SO-$ARCH.tar.gz" | grep -q "^$NOME/bin/$NOME$" || { echo "tar.gz sem o launcher"; exit 1; }
+            tar -tzf "$DIST/$NOME-$V-$SO-$ARCH.tar.gz" > "$RUNNER_TEMP/tar-lista.txt"   # listar ANTES de grep: com pipefail, grep -q fechando o pipe derruba o tar
+            grep -q "^$NOME/bin/$NOME$" "$RUNNER_TEMP/tar-lista.txt" || { echo "tar.gz sem o launcher"; exit 1; }
           fi
           ls -la "$DIST"
 

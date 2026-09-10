@@ -59,8 +59,8 @@ class ComandosAtualizacaoTest {
         json = ("{\"formato\":1,\"versao\":\"" + versao + "\",\"protocolo\":1,\"publicadoEm\":\"2026-09-10T00:00:00Z\",\"kid\":\"" + kid + "\",\"artefatos\":{"
                 + "\"linux\":{\"arquivo\":\"AgroEase-Agente-Impressao-" + versao + "-linux-x64.deb\",\"url\":\"" + base + "/a.deb\",\"sha256\":\"" + "ab".repeat(32) + "\",\"tamanho\":10},"
                 + "\"windows\":{\"arquivo\":\"AgroEase-Agente-Impressao-" + versao + "-windows-x64.exe\",\"url\":\"" + base + "/a.exe\",\"sha256\":\"" + "cd".repeat(32) + "\",\"tamanho\":10},"
-                + "\"macos-arm64\":{\"arquivo\":\"a.dmg\",\"url\":\"" + base + "/a.dmg\",\"sha256\":\"" + "ef".repeat(32) + "\",\"tamanho\":10},"
-                + "\"macos-x64\":{\"arquivo\":\"b.dmg\",\"url\":\"" + base + "/b.dmg\",\"sha256\":\"" + "01".repeat(32) + "\",\"tamanho\":10}}}").getBytes(StandardCharsets.UTF_8);
+                + "\"macos-arm64\":{\"arquivo\":\"AgroEase-Agente-Impressao-" + versao + "-macos-arm64.dmg\",\"url\":\"" + base + "/a.dmg\",\"sha256\":\"" + "ef".repeat(32) + "\",\"tamanho\":10},"
+                + "\"macos-x64\":{\"arquivo\":\"AgroEase-Agente-Impressao-" + versao + "-macos-x64.dmg\",\"url\":\"" + base + "/b.dmg\",\"sha256\":\"" + "01".repeat(32) + "\",\"tamanho\":10}}}").getBytes(StandardCharsets.UTF_8);
         Signature s = Signature.getInstance("Ed25519"); s.initSign(assinante.getPrivate()); s.update(json); sig = s.sign();
     }
 

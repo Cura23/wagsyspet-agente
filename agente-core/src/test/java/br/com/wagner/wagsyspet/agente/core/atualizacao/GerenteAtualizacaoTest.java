@@ -123,7 +123,7 @@ class GerenteAtualizacaoTest {
         assertThat(lido.versaoAnterior()).isEqualTo("1.0.0");
         assertThat(lido.artefato()).endsWith("AgroEase-Agente-Impressao-1.1.0-linux-x64.deb");
         assertThat(lido.formato()).isEqualTo(ManifestoRelease.FormatoInstalado.INSTALADOR);
-        assertThat(lido.launcherAtual()).contains("/opt/agroease-agente-impressao/bin/AgroEase-Agente-Impressao");
+        assertThat(lido.launcherAtual().map(Path::of)).as("comparar como Path: no Windows a string vira \\").contains(Path.of("/opt/agroease-agente-impressao/bin/AgroEase-Agente-Impressao"));
         assertThat(lido.dirDados()).isEqualTo(tmp.toString());
         EstadoAtualizacao.Estado e = g.estado().ler();
         assertThat(e.emAplicacao()).isPresent();
