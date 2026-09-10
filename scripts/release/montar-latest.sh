@@ -18,7 +18,7 @@ BASE_URL="https://github.com/${REPO}/releases/download/v${VERSAO}"
 [[ "$VERSAO" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "versão inválida: $VERSAO" >&2; exit 2; }
 [[ "$PROTOCOLO" =~ ^[0-9]+$ ]] || { echo "protocolo inválido: $PROTOCOLO" >&2; exit 2; }
 [ -r "$CHAVE" ] || { echo "chave não legível: $CHAVE" >&2; exit 2; }
-case "$CHAVE" in /*) ;; *) CHAVE="$PWD/$CHAVE" ;; esac   # o cd abaixo quebraria um caminho relativo
+case "$CHAVE" in /*|[A-Za-z]:*) ;; *) CHAVE="$PWD/$CHAVE" ;; esac   # o cd abaixo quebraria um caminho relativo (X:\ = Windows absoluto)
 cd "$DIR"
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }

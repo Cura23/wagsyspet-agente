@@ -257,14 +257,16 @@ jobs:
         run: |
           set -euo pipefail
           DIST=agente-app/target/dist; NOME=AgroEase-Agente-Impressao
-          SMK="$RUNNER_TEMP/f6"; rm -rf "$SMK"; mkdir -p "$SMK/home/.local/share/agroease/agente-impressao" "$SMK/dados" "$SMK/art" "$SMK/apps"
+          # Windows: RUNNER_TEMP vem como D:\a\_temp — bash/openssl/python querem POSIX (/d/a/_temp), a JVM quer Windows (D:\…)
+          if [ "$RUNNER_OS" = "Windows" ]; then SMK="$(cygpath -u "$RUNNER_TEMP")/f6"; SMK_JVM="$(cygpath -w "$RUNNER_TEMP")\\f6"; else SMK="$RUNNER_TEMP/f6"; SMK_JVM="$SMK"; fi
+          rm -rf "$SMK"; mkdir -p "$SMK/home/.local/share/agroease/agente-impressao" "$SMK/dados" "$SMK/art" "$SMK/apps"
           case "$(uname -m)" in x86_64|amd64) ARCH=x64 ;; arm64|aarch64) ARCH=arm64 ;; *) ARCH="$(uname -m)" ;; esac
           echo "== 1) instalar a versão ATUAL como a loja instalaria"
           case "$RUNNER_OS" in
             Linux)   cp -a "$DIST/$NOME" "$SMK/home/.local/share/agroease/agente-impressao/"; INST="$SMK/home/.local/share/agroease/agente-impressao/$NOME"; CLI="$INST/bin/$NOME-cli" ;;
             macOS)   cp -a "$DIST/$NOME.app" "$SMK/apps/"; INST="$SMK/apps/$NOME.app"; CLI="$INST/Contents/MacOS/$NOME-cli" ;;
             Windows) EXE=$(ls "$DIST"/*.exe | head -1)
-                     MSYS_NO_PATHCONV=1 "$EXE" /qn /norestart /L*v "$SMK/msi-install.log"   # o wrapper do jpackage repassa ao msiexec
+                     MSYS_NO_PATHCONV=1 "$EXE" /qn /norestart /L*v "$SMK_JVM\\msi-install.log"   # o wrapper do jpackage repassa ao msiexec
                      INST="$LOCALAPPDATA/$NOME"; CLI="$INST/$NOME-cli.exe"; ls "$INST" ;;
           esac
           "$CLI" --versao
@@ -288,8 +290,8 @@ jobs:
           for i in $(seq 1 30); do curl -sf --max-time 3 http://127.0.0.1:8770/latest.json >/dev/null 2>&1 && break; sleep 1; done
           curl -sf --max-time 5 http://127.0.0.1:8770/latest.json | head -c 200; echo
           echo "== 4) --atualizar pelo binário INSTALADO (sem tela: o agente relançado só orienta e sai)"
-          export AGROEASE_AGENTE_DIR="$SMK/dados"
-          export JAVA_TOOL_OPTIONS="-Duser.home=$SMK/home -Dagente.release.manifesto.url=http://127.0.0.1:8770/latest.json -Dagente.release.chave.publica=$PUB"
+          export AGROEASE_AGENTE_DIR="$SMK_JVM/dados"
+          export JAVA_TOOL_OPTIONS="-Duser.home=$SMK_JVM/home -Dagente.release.manifesto.url=http://127.0.0.1:8770/latest.json -Dagente.release.chave.publica=$PUB"
           unset DISPLAY WAYLAND_DISPLAY || true
           "$CLI" --atualizar
           echo "== 5) aguardar o atualizador"
