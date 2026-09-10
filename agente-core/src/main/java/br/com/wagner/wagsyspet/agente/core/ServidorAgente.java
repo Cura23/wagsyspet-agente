@@ -119,6 +119,10 @@ public class ServidorAgente extends WebSocketServer {
 
     /** Conexões AUTENTICADAS por Origin (uma só por vez — §7.4-5). */
     private final ConcurrentMap<String, WebSocket> autenticadas = new ConcurrentHashMap<>();
+    /** Última atividade AUTENTICADA (auth, mensagem, impressão) — base da ociosidade do self-update (F6-L1 D4). */
+    private volatile long ultimaAtividadeAutenticadaNanos = System.nanoTime();
+    /** Depois de {@link #fecharParaAtualizar()}: toda conexão nova é recusada com 1001 'ATUALIZANDO' até o processo sair. */
+    private volatile boolean atualizando;
     private final ScheduledExecutorService agenda;
     private final ExecutorService listagem;
     private final FilaImpressao fila;
@@ -287,6 +291,10 @@ public class ServidorAgente extends WebSocketServer {
         String origin = handshake.getFieldValue("Origin");
         Sessao sessao = new Sessao(origin, System.nanoTime());
         conn.setAttachment(sessao);
+        if (atualizando) {
+            fechar(conn, CloseFrame.GOING_AWAY, MOTIVO_ATUALIZANDO);
+            return;
+        }
         if (getConnections().size() > prazos.tetoConexoes) {
             log.warn("Teto de {} conexões atingido; recusando a nova de Origin='{}'", prazos.tetoConexoes, origin);
             fechar(conn, CloseFrame.TRY_AGAIN_LATER, "LIMITE_CONEXOES");
@@ -312,6 +320,9 @@ public class ServidorAgente extends WebSocketServer {
             }
             // só remove se ESTA conexão era a dona da vaga (outra pode ter assumido depois de uma conexão morta)
             autenticadas.remove(sessao.origin, conn);
+            if (sessao.autenticada()) {
+                ultimaAtividadeAutenticadaNanos = System.nanoTime(); // a ociosidade conta a partir do fim da sessão
+            }
         }
         log.info("Conexão fechada (code={}, remote={}, autenticada={}): {}", code, remote,
                 sessao != null && sessao.autenticada(), reason);
@@ -341,6 +352,9 @@ public class ServidorAgente extends WebSocketServer {
             return; // fechada antes de anexar (teto de conexões)
         }
         sessao.tocar(System.nanoTime());
+        if (sessao.autenticada()) {
+            ultimaAtividadeAutenticadaNanos = System.nanoTime();
+        }
         JsonNode msg;
         try {
             msg = JSON.readTree(message);
@@ -403,6 +417,7 @@ public class ServidorAgente extends WebSocketServer {
 
     private void autenticar(WebSocket conn, Sessao sessao, JsonNode msg) {
         if (sessao.autenticada()) {
+            ultimaAtividadeAutenticadaNanos = System.nanoTime();
             enviar(conn, Mensagens.authOk()); // idempotente: não gasta outro ticket
             return;
         }
@@ -599,6 +614,37 @@ public class ServidorAgente extends WebSocketServer {
     }
 
     // ── zelador / utilitários ──────────────────────────────────────────────────────────────────────────────────
+
+    public static final String MOTIVO_ATUALIZANDO = "ATUALIZANDO";
+
+    /** Nenhuma sessão autenticada aberta, fila vazia e motor livre — pré-auth não conta como uso (F6-L1). */
+    public boolean ocioso() {
+        boolean sessaoViva = autenticadas.values().stream().anyMatch(WebSocket::isOpen);
+        return !sessaoViva && fila.emEspera() == 0 && !fila.executando() && !fila.motorPreso();
+    }
+
+    /** Há quanto tempo está ocioso (zero se não está). */
+    public Duration ociosoHa() {
+        if (!ocioso()) {
+            return Duration.ZERO;
+        }
+        return Duration.ofNanos(Math.max(0, System.nanoTime() - ultimaAtividadeAutenticadaNanos));
+    }
+
+    /**
+     * Prepara a saída para atualizar: fecha TODAS as conexões com {@code 1001 'ATUALIZANDO'} (o PWA F6 mostra "volta em até 1 min";
+     * o F2 cai no aviso genérico) sem nenhum frame solto antes (o PWA casaria a um job pendente — D6), e passa a recusar conexões novas
+     * com o mesmo motivo até o processo encerrar. A porta só volta a atender quando a versão nova subir.
+     */
+    public void fecharParaAtualizar() {
+        atualizando = true;
+        for (WebSocket c : getConnections()) {
+            if (c.isOpen()) {
+                fechar(c, CloseFrame.GOING_AWAY, MOTIVO_ATUALIZANDO);
+            }
+        }
+        log.info("Conexões fechadas para atualizar; recusando novas até a versão nova subir");
+    }
 
     private void fecharOciosas() {
         long agora = System.nanoTime();

@@ -18,7 +18,7 @@ BASE_URL="https://github.com/${REPO}/releases/download/v${VERSAO}"
 [[ "$VERSAO" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "versão inválida: $VERSAO" >&2; exit 2; }
 [[ "$PROTOCOLO" =~ ^[0-9]+$ ]] || { echo "protocolo inválido: $PROTOCOLO" >&2; exit 2; }
 [ -r "$CHAVE" ] || { echo "chave não legível: $CHAVE" >&2; exit 2; }
-case "$CHAVE" in /*) ;; *) CHAVE="$PWD/$CHAVE" ;; esac   # o cd abaixo quebraria um caminho relativo
+case "$CHAVE" in /*|[A-Za-z]:*) ;; *) CHAVE="$PWD/$CHAVE" ;; esac   # o cd abaixo quebraria um caminho relativo (X:\ = Windows absoluto)
 cd "$DIR"
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
@@ -26,19 +26,20 @@ tamanho() { stat -c %s "$1" 2>/dev/null || stat -f %z "$1"; }
 
 # ── 1) nomes canônicos: <so>-<arch> a partir do que o jpackage gerou em cada runner ────────────────────────────────
 # O nome do arquivo já vem com o sufixo quando o ci.yml renomeou; aqui é só rede de segurança para arquivos "crus".
-for f in *.exe *.deb *.dmg; do
+for f in *.exe *.deb *.dmg *.tar.gz; do
   [ -e "$f" ] || continue
   case "$f" in
-    "$NOME-$VERSAO-"*-*.exe|"$NOME-$VERSAO-"*-*.deb|"$NOME-$VERSAO-"*-*.dmg) ;; # já canônico
+    "$NOME-$VERSAO-"*-*.exe|"$NOME-$VERSAO-"*-*.deb|"$NOME-$VERSAO-"*-*.dmg|"$NOME-$VERSAO-"*-*.tar.gz) ;; # já canônico
     *.exe) mv -v "$f" "$NOME-$VERSAO-windows-x64.exe" ;;
     *.deb) mv -v "$f" "$NOME-$VERSAO-linux-x64.deb" ;;
+    *.tar.gz) mv -v "$f" "$NOME-$VERSAO-linux-x64.tar.gz" ;;
     *.dmg) echo "dmg sem arch no nome ($f): renomeie no runner (macos-arm64|macos-x64)" >&2; exit 3 ;;
   esac
 done
 
 # ── 2) sha256 ────────────────────────────────────────────────────────────────────────────────────────────────────
 : > SHA256SUMS.txt
-for f in "$NOME-$VERSAO-"*.exe "$NOME-$VERSAO-"*.deb "$NOME-$VERSAO-"*.dmg; do
+for f in "$NOME-$VERSAO-"*.exe "$NOME-$VERSAO-"*.deb "$NOME-$VERSAO-"*.dmg "$NOME-$VERSAO-"*.tar.gz; do
   [ -e "$f" ] || continue
   h=$(sha256 "$f")
   echo "$h  $f" >> SHA256SUMS.txt
@@ -51,6 +52,7 @@ chave_so() { # arquivo → chave que o backend F1 usa (AGENTE_URL_<SO>)
   case "$1" in
     *-windows-x64.exe) echo windows ;;
     *-linux-x64.deb)   echo linux ;;
+    *-linux-x64.tar.gz) echo linux-tar ;;   # F6: app-image por usuário (self-update no Linux)
     *-macos-arm64.dmg) echo macos-arm64 ;;
     *-macos-x64.dmg)   echo macos-x64 ;;
     *) echo "" ;;
@@ -85,6 +87,7 @@ echo "== assinatura: $(tamanho latest.json.sig) bytes, kid $PUB_DER_KID"
   echo "AGENTE_VERSAO_ATUAL=$VERSAO"
   while read -r h f; do
     so=$(chave_so "$f" | tr 'a-z-' 'A-Z_')
+    [ "$so" = "LINUX_TAR" ] && continue   # o backend F1 não tem env para o tar.gz; o self-update lê direto do latest.json
     echo "AGENTE_URL_${so}=$BASE_URL/$f"
     echo "AGENTE_SHA256_${so}=$h"
   done < SHA256SUMS.txt

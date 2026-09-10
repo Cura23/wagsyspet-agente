@@ -139,7 +139,7 @@
                 <app.runtime>${project.build.directory}/runtime</app.runtime>
                 <app.dist>${project.build.directory}/dist</app.dist>
                 <app.input>${project.build.directory}/app</app.input>
-                <app.jpackage.comum>--name ${app.nome} --vendor AgroEase --copyright "AgroEase" --description "${app.descricao}" --input "${app.input}" --main-jar agente-app.jar --main-class ${app.main} --runtime-image "${app.runtime}" --dest "${app.dist}" --java-options -Xmx128m --java-options -Dsun.java2d.print.polling=false --java-options -Dapple.awt.UIElement=true --add-launcher ${app.nome}-cli="${project.basedir}/src/jpackage/cli.properties"</app.jpackage.comum>
+                <app.jpackage.comum>--name ${app.nome} --vendor AgroEase --copyright "AgroEase" --description "${app.descricao}" --input "${app.input}" --main-jar agente-app.jar --main-class ${app.main} --runtime-image "${app.runtime}" --dest "${app.dist}" --java-options -Xmx128m --java-options -Dsun.java2d.print.polling=false --java-options -Dapple.awt.UIElement=true --java-options -Djava.net.useSystemProxies=true --add-launcher ${app.nome}-cli="${project.basedir}/src/jpackage/cli.properties"</app.jpackage.comum>
             </properties>
             <build>
                 <plugins>

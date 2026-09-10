@@ -89,6 +89,11 @@ public final class DiretoriosDoAgente {
         return raiz.resolve("agente.lock");
     }
 
+    /** Pasta do self-update (F6): {@code estado.json}, instalador baixado, cópia do atualizador, instalador anterior. */
+    public Path atualizacao() {
+        return raiz.resolve("atualizacao");
+    }
+
     public Path logs() {
         return raiz.resolve("logs");
     }

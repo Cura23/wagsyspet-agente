@@ -37,6 +37,16 @@ public final class AcoesUi {
         boolean pareado();
 
         void sair();
+
+        /** Versão nova já baixada e verificada, se houver (F6). */
+        default Optional<String> atualizacaoDisponivel() {
+            return Optional.empty();
+        }
+
+        /** Fecha as conexões com ATUALIZANDO, entrega o plano ao atualizador e encerra o processo (F6). */
+        default void atualizarAgora() throws Exception {
+            throw new IllegalStateException("atualização automática indisponível nesta instalação");
+        }
     }
 
     public static final String TITULO = "Agente de Impressão AgroEase";
@@ -111,6 +121,21 @@ public final class AcoesUi {
         } else {
             SwingUtilities.invokeLater(() -> mostrarAviso.accept(msg));
         }
+    }
+
+    public void atualizar() {
+        Optional<String> v = agente.atualizacaoDisponivel();
+        if (v.isEmpty()) {
+            avisar("Nenhuma atualização baixada ainda. O agente verifica sozinho algumas vezes por dia.");
+            return;
+        }
+        int r = JOptionPane.showConfirmDialog(null,
+                "Atualizar o agente para a versão " + v.get() + " agora?\nO agente fecha por até 1 minuto e volta sozinho. Não imprima nesse intervalo.",
+                TITULO + " — Atualizar", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) {
+            return;
+        }
+        emSegundoPlano("atualizar", agente::atualizarAgora);
     }
 
     public void verLog() {

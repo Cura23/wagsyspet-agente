@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.awt.GraphicsEnvironment;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -118,6 +119,24 @@ public final class Main {
             case DESINSTALAR -> {
                 return ComandosAutostart.padrao(out, err).desinstalar();
             }
+            case VERIFICAR_ATUALIZACAO -> {
+                return ComandosAtualizacao.padrao(out, err, versao()).verificar();
+            }
+            case ATUALIZAR -> {
+                return ComandosAtualizacao.padrao(out, err, versao()).atualizar(dirs,
+                        br.com.wagner.wagsyspet.agente.app.atualizacao.LancadorAtualizadorDeFora.padrao(dirs, versao(), comando -> {
+                            try {
+                                Path saida = dirs.atualizacao().resolve("atualizador.log");
+                                Files.createDirectories(saida.getParent());
+                                ProcessoFilho.novo(comando).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(saida.toFile())).start();
+                            } catch (IOException e) {
+                                throw new java.io.UncheckedIOException(e);
+                            }
+                        }));
+            }
+            case APLICAR_ATUALIZACAO -> {
+                return AplicadorAtualizacao.padrao(out).aplicar(Path.of(a.posicionais().get(0)));
+            }
             default -> throw new IllegalStateException("comando não tratado: " + a.comando());
         }
     }
@@ -141,7 +160,14 @@ public final class Main {
         }
         try (TravaDeInstancia ignorada = trava.get()) {
             int[] portas = a.porta() != null ? new int[]{a.porta()} : SubidaComFallback.PORTAS_PADRAO;
-            AgenteDesktop agente = new AgenteDesktop(dirs, versao(), portas, out, PortaImpressao.real());
+            Optional<AgenteDesktop.Atualizacao> atualizacao;
+            try {
+                atualizacao = Optional.of(AgenteDesktop.Atualizacao.padrao(dirs, versao()));
+            } catch (RuntimeException e) {
+                log.warn("Self-update desligado nesta execução: {}", e.toString());
+                atualizacao = Optional.empty();
+            }
+            AgenteDesktop agente = new AgenteDesktop(dirs, versao(), portas, out, PortaImpressao.real(), atualizacao);
             Superficie ui = montarUi(a, agente);
             if (ui != null) {
                 agente.ui(ui);

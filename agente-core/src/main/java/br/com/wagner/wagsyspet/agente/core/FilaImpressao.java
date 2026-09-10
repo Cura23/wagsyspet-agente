@@ -91,6 +91,11 @@ final class FilaImpressao implements AutoCloseable {
         }, prazo.toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    /** Há um job dentro do motor agora. */
+    boolean executando() {
+        return executandoDesdeNanos != 0;
+    }
+
     int emEspera() {
         return executor.getQueue().size();
     }

@@ -72,7 +72,7 @@ public final class ImpressoraCupsLp {
             tmp = Files.createTempFile(PREFIXO_TEMP, ".pdf");
             Files.write(tmp, pdf);
 
-            List<String> cmd = new ArrayList<>(List.of(LP.toString(), "-d", nomeImpressora, "-t", nomeJob));
+            List<String> cmd = new ArrayList<>(comandoLp(nomeImpressora, nomeJob));
             if (modo == ModoPapel.PAPEL_DO_PDF) {
                 cmd.add("-o");
                 cmd.add("media=Custom." + LARGURA_BOBINA_MM + "x" + alturaMm(pdf) + "mm");
@@ -90,6 +90,16 @@ public final class ImpressoraCupsLp {
                 }
             }
         }
+    }
+
+    /**
+     * Base do comando: {@code lp -d <fila> -t <job> -o nopdfAutoRotate}. O filtro {@code pdftopdf} do CUPS GIRA 90° toda página
+     * "paisagem" (mais larga que alta) para casar com a mídia retrato — e um cupom curto (80 × 60 mm, como o teste do PWA) é
+     * exatamente isso: o texto saía deitado no cups-pdf e sairia deitado numa térmica (achado do teste manual F3/F6, 10/09).
+     * {@code nopdfAutoRotate} (cups-filters ≥ 1.x) desliga a rotação; onde a opção não existe (CUPS da Apple) é ignorada.
+     */
+    static List<String> comandoLp(String nomeImpressora, String nomeJob) {
+        return List.of(LP.toString(), "-d", nomeImpressora, "-t", nomeJob, "-o", "nopdfAutoRotate");
     }
 
     /** Roda o comando com prazo REAL: stdout lido em thread própria; estourou → mata o processo e devolve ERRO. */

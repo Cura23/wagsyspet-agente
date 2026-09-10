@@ -237,7 +237,86 @@ jobs:
           esac
           NOVO="$DIST/$NOME-$V-$SO-$ARCH.$EXT"
           mv -v "$ORIG" "$NOVO"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # F6 D1: app-image relocável em tar.gz — instalação por usuário (~/.local) sem root, é o formato que se AUTO-ATUALIZA
+            # no Linux (o .deb em /opt exige senha; fica como "avisar + 1 clique"). Mesmo conteúdo que o CI acabou de testar.
+            tar -C "$DIST" -czf "$DIST/$NOME-$V-$SO-$ARCH.tar.gz" "$NOME"
+            tar -tzf "$DIST/$NOME-$V-$SO-$ARCH.tar.gz" > "$RUNNER_TEMP/tar-lista.txt"   # listar ANTES de grep: com pipefail, grep -q fechando o pipe derruba o tar
+            grep -q "^$NOME/bin/$NOME$" "$RUNNER_TEMP/tar-lista.txt" || { echo "tar.gz sem o launcher"; exit 1; }
+          fi
           ls -la "$DIST"
+
+      # ── F6-L2: self-update REAL neste SO — instala a versão atual, publica uma release falsa 9.9.9 (build real do mesmo código,
+      #    assinada com par DESCARTÁVEL via override -D, plano D11) num servidor loopback e deixa o agente se atualizar sozinho:
+      #    Linux = tar.gz por usuário (rename-swap), Windows = .exe /qn do jpackage (upgrade MSI in-place, o risco em aberto do recon),
+      #    macOS = troca do .app a partir do .dmg (hdiutil/ditto/codesign). Sai verde só se o binário INSTALADO passa a responder 9.9.9.
+      - name: Self-update real (release falsa 9.9.9 assinada, servidor loopback)
+        if: always() && steps.empacotar.outcome == 'success'
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          DIST=agente-app/target/dist; NOME=AgroEase-Agente-Impressao
+          # Windows: RUNNER_TEMP vem como D:\a\_temp — bash/openssl/python querem POSIX (/d/a/_temp), a JVM quer Windows (D:\…)
+          if [ "$RUNNER_OS" = "Windows" ]; then SMK="$(cygpath -u "$RUNNER_TEMP")/f6"; SMK_JVM="$(cygpath -w "$RUNNER_TEMP")\\f6"; else SMK="$RUNNER_TEMP/f6"; SMK_JVM="$SMK"; fi
+          rm -rf "$SMK"; mkdir -p "$SMK/home/.local/share/agroease/agente-impressao" "$SMK/dados" "$SMK/art" "$SMK/apps"
+          case "$(uname -m)" in x86_64|amd64) ARCH=x64 ;; arm64|aarch64) ARCH=arm64 ;; *) ARCH="$(uname -m)" ;; esac
+          echo "== 1) instalar a versão ATUAL como a loja instalaria"
+          case "$RUNNER_OS" in
+            Linux)   cp -a "$DIST/$NOME" "$SMK/home/.local/share/agroease/agente-impressao/"; INST="$SMK/home/.local/share/agroease/agente-impressao/$NOME"; CLI="$INST/bin/$NOME-cli" ;;
+            macOS)   cp -a "$DIST/$NOME.app" "$SMK/apps/"; INST="$SMK/apps/$NOME.app"; CLI="$INST/Contents/MacOS/$NOME-cli" ;;
+            Windows) EXE=$(ls "$DIST"/*.exe | head -1)
+                     MSYS_NO_PATHCONV=1 "$EXE" /qn /norestart /L*v "$SMK_JVM\\msi-install.log"   # o wrapper do jpackage repassa ao msiexec
+                     INST="$LOCALAPPDATA/$NOME"; CLI="$INST/$NOME-cli.exe"; ls "$INST" ;;
+          esac
+          "$CLI" --versao
+          echo "== 2) build 9.9.9 (mesmo código) em dist separado"
+          ./mvnw -B -ntp -q -Drevision=9.9.9 "-Dapp.dist=$PWD/agente-app/target/dist-999" -pl agente-app -am -DskipTests -Pempacotar package
+          D9=agente-app/target/dist-999; ls "$D9"
+          case "$RUNNER_OS" in
+            Linux)   tar -C "$D9" -czf "$SMK/art/$NOME-9.9.9-linux-x64.tar.gz" "$NOME"; cp "$D9"/*.deb "$SMK/art/$NOME-9.9.9-linux-x64.deb" ;;
+            macOS)   cp "$D9"/*.dmg "$SMK/art/$NOME-9.9.9-macos-$ARCH.dmg" ;;
+            Windows) cp "$D9"/*.exe "$SMK/art/$NOME-9.9.9-windows-x64.exe" ;;
+          esac
+          echo "== 3) release falsa assinada com par descartável, servida em 127.0.0.1"
+          openssl genpkey -algorithm ed25519 -out "$SMK/priv.pem"
+          (cd "$SMK/art" && bash "$GITHUB_WORKSPACE/scripts/release/montar-latest.sh" 9.9.9 . Cura23/wagsyspet-agente "$SMK/priv.pem" 1 >/dev/null)
+          python3 - "$SMK/art/latest.json" <<'PY'
+          import sys; p=sys.argv[1]; s=open(p).read().replace("https://github.com/Cura23/wagsyspet-agente/releases/download/v9.9.9/","http://127.0.0.1:8770/"); open(p,"w").write(s)
+          PY
+          openssl pkeyutl -sign -inkey "$SMK/priv.pem" -rawin -in "$SMK/art/latest.json" -out "$SMK/art/latest.json.sig"
+          PUB=$(openssl pkey -in "$SMK/priv.pem" -pubout | grep -v -- '-----' | tr -d '\n')
+          (cd "$SMK/art" && python3 -m http.server 8770 --bind 127.0.0.1 >/dev/null 2>&1 &)
+          for i in $(seq 1 30); do curl -sf --max-time 3 http://127.0.0.1:8770/latest.json >/dev/null 2>&1 && break; sleep 1; done
+          curl -sf --max-time 5 http://127.0.0.1:8770/latest.json | head -c 200; echo
+          echo "== 4) --atualizar pelo binário INSTALADO (sem tela: o agente relançado só orienta e sai)"
+          export AGROEASE_AGENTE_DIR="$SMK_JVM/dados"
+          export JAVA_TOOL_OPTIONS="-Duser.home=$SMK_JVM/home -Dagente.release.manifesto.url=http://127.0.0.1:8770/latest.json -Dagente.release.chave.publica=$PUB"
+          unset DISPLAY WAYLAND_DISPLAY || true
+          "$CLI" --atualizar
+          echo "== 5) aguardar o atualizador"
+          for i in $(seq 1 120); do
+            grep -qE 'relançado|Falha|cancelada|ilegível' "$SMK/dados/atualizacao/atualizador.log" 2>/dev/null && break
+            sleep 2
+          done
+          echo "--- atualizador.log"; cat "$SMK/dados/atualizacao/atualizador.log" || { echo "sem atualizador.log"; ls -la "$SMK/dados/atualizacao" || true; exit 1; }
+          grep -q "Instalado:" "$SMK/dados/atualizacao/atualizador.log" || { echo "instalador não concluiu"; cat "$SMK/dados/atualizacao/estado.json" || true; cat "$SMK"/dados/logs/*.log 2>/dev/null | tail -30 || true; exit 1; }
+          sleep 3
+          echo "== 6) o binário instalado agora é a 9.9.9?"
+          unset JAVA_TOOL_OPTIONS
+          SAIDA=$("$CLI" --versao 2>&1); echo "$SAIDA"
+          grep -qF "AgroEase 9.9.9 " <<<"$SAIDA " || { echo "instalado NÃO virou 9.9.9"; exit 1; }
+          echo "--- estado.json"; cat "$SMK/dados/atualizacao/estado.json"
+          grep -q '"versaoNova" : "9.9.9"' "$SMK/dados/atualizacao/estado.json"
+          case "$RUNNER_OS" in
+            Linux) "$SMK/dados/atualizacao/anterior/$NOME/bin/$NOME-cli" --versao | grep -qF "AgroEase $(./mvnw -q -B -ntp $REVISAO_ARG help:evaluate -Dexpression=revision -DforceStdout) " && echo "anterior guardado OK" ;;
+            macOS) ls "$SMK/dados/atualizacao/anterior/$NOME.app/Contents/MacOS/$NOME-cli" && echo "anterior guardado OK" ;;
+            Windows) echo "(Windows: sem instalador anterior guardado nesta build — rollback via download da release anterior, quando existir)" ;;
+          esac
+          echo "== 7) limpeza: encerrar o agente relançado (se ficou vivo) e o servidor"
+          pkill -f "$NOME" || true; pkill -f "http.server 8770" || true
+          unset AGROEASE_AGENTE_DIR
+          echo "self-update real OK neste SO"
 
       - name: Evidência — instalador gerado pelo jpackage
         if: always() && steps.empacotar.outcome == 'success'
@@ -248,5 +327,6 @@ jobs:
             agente-app/target/dist/AgroEase-Agente-Impressao-*.deb
             agente-app/target/dist/AgroEase-Agente-Impressao-*.exe
             agente-app/target/dist/AgroEase-Agente-Impressao-*.dmg
+            agente-app/target/dist/AgroEase-Agente-Impressao-*.tar.gz
           if-no-files-found: error
           retention-days: 7

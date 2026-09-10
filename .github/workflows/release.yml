@@ -92,12 +92,16 @@ jobs:
           [ -n "$PROTO" ] || { echo "não achei ProtocoloVersao.ATUAL"; exit 1; }
           scripts/release/montar-latest.sh "${{ needs.versao.outputs.versao }}" artefatos "${{ github.repository }}" "$RUNNER_TEMP/release.pem" "$PROTO"
           rm -f "$RUNNER_TEMP/release.pem"
-          # a chave pública EMBUTIDA no agente tem de validar o que acabamos de assinar (senão a F6 recusaria a própria release)
-          PUB=$(grep '^release.chave.publica=' agente-app/src/main/resources/release.properties | cut -d= -f2-)
+          # a chave que assinou tem de ser uma das EMBUTIDAS no agente (atual ou reserva — F6 D12), senão o self-update recusaria
+          # a própria release. O kid do latest.json identifica qual; a assinatura é verificada com ESSA chave.
+          PROPS=agente-protocolo/src/main/resources/release.properties
+          KID_JSON=$(grep -o '"kid":"[0-9a-f]*"' artefatos/latest.json | cut -d'"' -f4)
+          if   [ "$KID_JSON" = "$(grep '^release.kid=' $PROPS | cut -d= -f2-)" ]; then PUB=$(grep '^release.chave.publica=' $PROPS | cut -d= -f2-); QUAL=atual
+          elif [ "$KID_JSON" = "$(grep '^release.kid.reserva=' $PROPS | cut -d= -f2-)" ]; then PUB=$(grep '^release.chave.publica.reserva=' $PROPS | cut -d= -f2-); QUAL=reserva
+          else echo "kid do latest.json ($KID_JSON) não é nem a chave atual nem a reserva embutidas no agente"; exit 1; fi
           printf -- '-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n' "$PUB" > "$RUNNER_TEMP/pub.pem"
           openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/pub.pem" -rawin -in artefatos/latest.json -sigfile artefatos/latest.json.sig
-          KID_EMBUTIDO=$(grep '^release.kid=' agente-app/src/main/resources/release.properties | cut -d= -f2-)
-          grep -q "\"kid\":\"$KID_EMBUTIDO\"" artefatos/latest.json || { echo "kid do latest.json ≠ kid embutido no agente"; exit 1; }
+          echo "latest.json assinado pela chave $QUAL (kid $KID_JSON) e verificado com a pública embutida"
 
       - name: Criar a release com todos os artefatos
         shell: bash

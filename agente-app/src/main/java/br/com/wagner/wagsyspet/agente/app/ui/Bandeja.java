@@ -49,6 +49,9 @@ public final class Bandeja implements Superficie {
         menu.add(item("Impressora…", acoes::escolherImpressora));
         menu.add(item("Imprimir teste", acoes::imprimirTeste));
         menu.add(item("Ver log", acoes::verLog));
+        itemAtualizar = item("Atualizar…", acoes::atualizar);
+        itemAtualizar.setEnabled(false);
+        menu.add(itemAtualizar);
         menu.addSeparator();
         menu.add(item("Desparear este computador…", acoes::desparear));
         menu.add(item("Sair", acoes::sair));
@@ -65,6 +68,18 @@ public final class Bandeja implements Superficie {
         } catch (RuntimeException e) {
             return 16;
         }
+    }
+
+    private MenuItem itemAtualizar;
+
+    @Override
+    public void atualizacao(java.util.Optional<String> versaoDisponivel) {
+        java.awt.EventQueue.invokeLater(() -> {
+            if (itemAtualizar != null) {
+                itemAtualizar.setEnabled(versaoDisponivel.isPresent());
+                itemAtualizar.setLabel(versaoDisponivel.map(v -> "Atualizar para " + v + "…").orElse("Atualizar…"));
+            }
+        });
     }
 
     private static MenuItem item(String rotulo, Runnable acao) {

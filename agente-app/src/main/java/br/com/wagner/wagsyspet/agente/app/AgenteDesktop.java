@@ -1,5 +1,6 @@
 package br.com.wagner.wagsyspet.agente.app;
 
+import br.com.wagner.wagsyspet.agente.app.autostart.Autostart;
 import br.com.wagner.wagsyspet.agente.core.AgenteMain;
 import br.com.wagner.wagsyspet.agente.core.ConfiguracaoLocal;
 import br.com.wagner.wagsyspet.agente.core.ConfiguracaoLocalArquivo;
@@ -29,6 +30,11 @@ import java.util.Optional;
 import java.nio.file.Files;
 import java.nio.file.attribute.FileTime;
 import java.util.concurrent.CompletableFuture;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.GerenteAtualizacao;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.LancadorAtualizador;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.Reversor;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.EstadoAtualizacao;
+import br.com.wagner.wagsyspet.agente.protocolo.release.ManifestoRelease;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -52,6 +58,30 @@ final class AgenteDesktop implements AcoesUi.Agente {
     static final int SAIDA_OK = 0;
     static final int SAIDA_SERVIDOR_MORTO = 3;
     static final int SAIDA_SEM_PORTA = 4;
+    /** Versão nova não confirmou saúde em 2 boots → revertida; o supervisor relança a anterior (F6 D4). */
+    static final int SAIDA_REVERTIDA = 5;
+
+    /**
+     * Peças do self-update (F6-L1), injetáveis para teste: o gerente (verifica/baixa/plano/sentinela), quem lança o atualizador
+     * externo, quem reverte, e os prazos (verificação inicial e periódica, intervalo entre tentativas de aplicar, prazo de saúde).
+     */
+    record Atualizacao(GerenteAtualizacao gerente, LancadorAtualizador lancador, Reversor reversor,
+                       Duration verificacaoInicial, Duration intervaloVerificacao, Duration intervaloTentativa, Duration prazoSaude) {
+        static Atualizacao padrao(DiretoriosDoAgente dirs, String versao) {
+            ManifestoRelease.FormatoInstalado formato = ComandosAtualizacao.formatoInstalado(Autostart.launcherDesteProcesso(), Path.of(System.getProperty("user.home", ".")));
+            LancadorAtualizador deFora = br.com.wagner.wagsyspet.agente.app.atualizacao.LancadorAtualizadorDeFora.padrao(dirs, versao, comando -> {
+                try {
+                    Path saida = dirs.atualizacao().resolve("atualizador.log");
+                    ProcessoFilho.novo(comando).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(saida.toFile())).start();
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            });
+            return new Atualizacao(ComandosAtualizacao.gerentePadrao(dirs, versao), deFora,
+                    br.com.wagner.wagsyspet.agente.app.atualizacao.Instaladores.reversorDesteSo(dirs, formato),
+                    GerenteAtualizacao.VERIFICACAO_INICIAL, GerenteAtualizacao.INTERVALO_VERIFICACAO, Duration.ofSeconds(30), GerenteAtualizacao.PRAZO_SAUDE);
+        }
+    }
     /** Re-subidas automáticas antes de desistir (exit 3): Windows/Linux-sem-systemd não têm supervisor (adversarial L4-A4). */
     static final int[] ESPERA_RESUBIDA_SEGUNDOS = {3, 10, 30};
     /** Intervalo do zelador que relê o cofre quando a CLI (--parear/--desparear) mexe no pareamento com o agente aberto (C3). */
@@ -77,8 +107,16 @@ final class AgenteDesktop implements AcoesUi.Agente {
     private volatile Pareamento pareamento;
     private volatile boolean aquecido;
     private volatile FileTime cofreVistoEm;
+    private final Optional<Atualizacao> atualizacao;
+    private volatile boolean aplicandoAtualizacao;
+    private volatile long ultimoAvisoAtualizacaoDia = -1;
 
     AgenteDesktop(DiretoriosDoAgente dirs, String versao, int[] portas, PrintStream out, PortaImpressao impressao) {
+        this(dirs, versao, portas, out, impressao, Optional.empty());
+    }
+
+    /** @param atualizacao vazio = sem self-update (testes antigos); {@link Atualizacao#padrao} no binário instalado */
+    AgenteDesktop(DiretoriosDoAgente dirs, String versao, int[] portas, PrintStream out, PortaImpressao impressao, Optional<Atualizacao> atualizacao) {
         this.dirs = Objects.requireNonNull(dirs);
         this.versao = Objects.requireNonNull(versao);
         this.portas = portas.clone();
@@ -86,6 +124,7 @@ final class AgenteDesktop implements AcoesUi.Agente {
         this.impressao = Objects.requireNonNull(impressao);
         this.cofre = new CofreCredencial(dirs);
         this.config = new ConfiguracaoLocalArquivo(dirs.config());
+        this.atualizacao = Objects.requireNonNull(atualizacao);
     }
 
     /** Liga a superfície visual (bandeja/janela) — antes de {@link #executar()}. Sem chamada = headless. */
@@ -98,6 +137,23 @@ final class AgenteDesktop implements AcoesUi.Agente {
     /** Bloqueia até o agente encerrar; devolve o código de saída do processo. */
     int executar() throws InterruptedException {
         Runtime.getRuntime().addShutdownHook(new Thread(this::pararServidorSilencioso, "agente-shutdown"));
+        boolean aguardarConfirmacao = false;
+        if (atualizacao.isPresent()) {
+            GerenteAtualizacao g = atualizacao.get().gerente();
+            switch (g.avaliarBoot()) {
+                case REVERTER -> {
+                    EstadoAtualizacao.EmAplicacao ap = g.emAplicacao().orElseThrow();
+                    boolean revertido = atualizacao.get().reversor().reverter(ap);
+                    g.marcarRevertida(ap, revertido ? "revertida para " + ap.versaoAnterior() : "não confirmou saúde; sem reversor neste SO, segue nesta versão");
+                    out.println("Atualização para " + ap.versaoNova() + " não confirmou; " + (revertido ? "voltando para " + ap.versaoAnterior() + "." : "seguindo na versão atual."));
+                    if (revertido) {
+                        return SAIDA_REVERTIDA; // o supervisor relança a versão anterior
+                    }
+                }
+                case AGUARDAR_CONFIRMACAO -> aguardarConfirmacao = true;
+                default -> { }
+            }
+        }
         Optional<Pareamento> p = cofre.ler();
         cofreVistoEm = mtimeCofre();
         if (p.isPresent()) {
@@ -131,6 +187,14 @@ final class AgenteDesktop implements AcoesUi.Agente {
             ui.estado("Não pareado", "Use \"Parear…\" com o código gerado no painel da loja.", false);
         }
         zelador.scheduleWithFixedDelay(this::vigiarCofre, INTERVALO_ZELADOR.toMillis(), INTERVALO_ZELADOR.toMillis(), TimeUnit.MILLISECONDS);
+        if (atualizacao.isPresent()) {
+            Atualizacao at = atualizacao.get();
+            if (aguardarConfirmacao) {
+                zelador.schedule(this::confirmarSaude, at.prazoSaude().toMillis(), TimeUnit.MILLISECONDS);
+            }
+            zelador.scheduleWithFixedDelay(this::verificarAtualizacao, at.verificacaoInicial().toMillis(), at.intervaloVerificacao().toMillis(), TimeUnit.MILLISECONDS);
+            zelador.scheduleWithFixedDelay(this::tentarAplicarAtualizacao, at.intervaloTentativa().toMillis(), at.intervaloTentativa().toMillis(), TimeUnit.MILLISECONDS);
+        }
         int codigo = encerramento.join();
         zelador.shutdownNow();
         pararServidorSilencioso();
@@ -279,6 +343,132 @@ final class AgenteDesktop implements AcoesUi.Agente {
                     Thread.currentThread().interrupt();
                 } catch (RuntimeException e) {
                     log.debug("stop(): {}", e.toString());
+                }
+            }
+        }
+    }
+
+    // ── self-update (F6-L1) ────────────────────────────────────────────────────────────────────────────────────
+
+    /** Servidor escutando há {@code prazoSaude} depois de um boot com troca pendente → confirma (ou recusa, se ainda é a versão antiga). */
+    private void confirmarSaude() {
+        atualizacao.ifPresent(at -> {
+            ServidorAgente s = servidor;
+            if (s != null && s.estaEscutando() || (s == null && pareamento == null)) { // não pareado também é "vivo"
+                at.gerente().confirmar();
+                atualizarEstado();
+            } else {
+                log.warn("Servidor não está escutando no prazo de saúde; a confirmação fica para o próximo boot");
+            }
+        });
+    }
+
+    /** Verificação periódica: baixa a versão nova (se houver) e avisa a UI 1× por dia. */
+    void verificarAtualizacao() {
+        atualizacao.ifPresent(at -> {
+            try {
+                GerenteAtualizacao.Situacao s = at.gerente().verificar();
+                Optional<String> v = at.gerente().versaoDisponivel();
+                if (ui != null) {
+                    ui.atualizacao(v);
+                }
+                if (s == GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO && v.isPresent()) {
+                    long dia = System.currentTimeMillis() / 86_400_000L;
+                    if (ui != null && dia != ultimoAvisoAtualizacaoDia) {
+                        ultimoAvisoAtualizacaoDia = dia;
+                        ui.aviso("Agente de Impressão AgroEase", "Versão " + v.get() + " pronta. O agente se atualiza sozinho quando o caixa ficar parado, ou use \"Atualizar\".");
+                    }
+                }
+            } catch (RuntimeException e) {
+                log.warn("Verificação de atualização falhou: {}", e.toString());
+            }
+        });
+    }
+
+    /** A cada intervalo: se há versão baixada e o caixa está ocioso há tempo suficiente, aplica. */
+    void tentarAplicarAtualizacao() {
+        atualizacao.ifPresent(at -> {
+            ServidorAgente s = servidor;
+            boolean ocioso = s == null || s.ocioso();
+            Duration ha = s == null ? Duration.ofDays(1) : s.ociosoHa();
+            if (!aplicandoAtualizacao && at.gerente().podeAplicar(ocioso, ha)) {
+                aplicarAtualizacao("ociosidade");
+            }
+        });
+    }
+
+    @Override
+    public Optional<String> atualizacaoDisponivel() {
+        return atualizacao.flatMap(at -> at.gerente().versaoDisponivel());
+    }
+
+    @Override
+    public void atualizarAgora() throws IOException {
+        Atualizacao at = atualizacao.orElseThrow(() -> new IllegalStateException("atualização automática indisponível nesta instalação"));
+        if (at.gerente().versaoDisponivel().isEmpty()) {
+            GerenteAtualizacao.Situacao s = at.gerente().verificar();
+            if (s != GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO) {
+                throw new IOException(switch (s) {
+                    case ATUALIZADO -> "O agente já está na versão mais recente.";
+                    case INDISPONIVEL -> "Não consegui consultar a release agora. Tente de novo em alguns minutos.";
+                    case ADIADO -> "Essa versão falhou ao instalar aqui recentemente; nova tentativa em 24 h.";
+                    default -> "A release publicada foi recusada pela verificação de segurança.";
+                });
+            }
+        }
+        aplicarAtualizacao("pedido manual");
+    }
+
+    /**
+     * Fecha as conexões com 1001 'ATUALIZANDO', grava o plano, para o servidor, lança o atualizador externo e encerra com 0
+     * (o atualizador aplica e relança). Se o lançamento falhar, desfaz e sobe o servidor de volta.
+     */
+    private void aplicarAtualizacao(String gatilho) {
+        Atualizacao at = atualizacao.orElseThrow();
+        synchronized (trocaServidor) {
+            if (aplicandoAtualizacao || encerramento.isDone()) {
+                return;
+            }
+            aplicandoAtualizacao = true;
+            ServidorAgente s = servidor;
+            Pareamento p = pareamento;
+            Path plano;
+            try {
+                plano = at.gerente().prepararAplicacao(versao, Autostart.launcherDesteProcesso(),
+                        ComandosAtualizacao.formatoInstalado(Autostart.launcherDesteProcesso(), Path.of(System.getProperty("user.home", "."))),
+                        "pedido manual".equals(gatilho) ? br.com.wagner.wagsyspet.agente.core.atualizacao.PlanoAtualizacao.Gatilho.MANUAL
+                                : br.com.wagner.wagsyspet.agente.core.atualizacao.PlanoAtualizacao.Gatilho.AUTO);
+            } catch (IOException | IllegalStateException e) {
+                log.warn("Não deu para preparar a atualização ({}): {}", gatilho, e.toString());
+                aplicandoAtualizacao = false;
+                return;
+            }
+            if (s != null) {
+                s.fecharParaAtualizar();
+            }
+            if (ui != null) {
+                ui.estado("Atualizando…", "O agente volta sozinho em até 1 minuto.", p != null);
+            }
+            pararServidorSilencioso();
+            try {
+                at.lancador().lancar(plano);
+                log.info("Atualizador lançado ({}); encerrando para ele aplicar {}", gatilho, plano);
+                out.println("Atualizando o agente; ele volta sozinho em até 1 minuto.");
+                encerramento.complete(SAIDA_OK);
+            } catch (IOException e) {
+                log.error("Não consegui lançar o atualizador: {}", e.toString());
+                at.gerente().abortarAplicacao(e.toString());
+                aplicandoAtualizacao = false;
+                if (ui != null) {
+                    ui.erro("Agente de Impressão AgroEase", "Não consegui iniciar a atualização: " + e.getMessage());
+                }
+                if (p != null) {
+                    try {
+                        subir(p);
+                    } catch (Exception ex) {
+                        log.error("Servidor não voltou depois da falha do atualizador: {}", ex.toString());
+                        encerramento.complete(SAIDA_SERVIDOR_MORTO);
+                    }
                 }
             }
         }

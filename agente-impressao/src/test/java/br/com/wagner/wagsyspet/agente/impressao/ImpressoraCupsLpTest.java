@@ -74,6 +74,14 @@ class ImpressoraCupsLpTest {
     }
 
     @Test
+    @DisplayName("comando do lp leva -o nopdfAutoRotate: sem isso o pdftopdf gira 90° um cupom mais largo que alto (texto deitado — teste manual 10/09)")
+    void naoGiraCupomPaisagem() {
+        List<String> cmd = ImpressoraCupsLp.comandoLp("PDF", "AgroEase cupom x");
+        assertThat(cmd).startsWith("lp".equals(cmd.get(0)) ? "lp" : cmd.get(0), "-d", "PDF", "-t", "AgroEase cupom x");
+        assertThat(cmd).containsSequence("-o", "nopdfAutoRotate");
+    }
+
+    @Test
     @DisplayName("prefixo do arquivo temporário e nome do job nunca expõem 'wagsyspet' ao lojista")
     void marca() {
         assertThat(ImpressoraCupsLp.PREFIXO_TEMP).containsIgnoringCase("agroease").doesNotContainIgnoringCase("wagsyspet");
