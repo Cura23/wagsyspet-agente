@@ -15,7 +15,7 @@ import java.util.Set;
 record Argumentos(Comando comando, Map<String, String> opcoes, List<String> posicionais, List<String> erros) {
 
     enum Comando {
-        SERVIR, PAREAR, DESPAREAR, STATUS, VERSAO, DIAGNOSTICO, GERAR_PDF_TESTE, IMPRIMIR_TESTE, INSTALAR, DESINSTALAR, AJUDA, DEV
+        SERVIR, PAREAR, DESPAREAR, STATUS, VERSAO, DIAGNOSTICO, GERAR_PDF_TESTE, IMPRIMIR_TESTE, INSTALAR, DESINSTALAR, VERIFICAR_ATUALIZACAO, ATUALIZAR, APLICAR_ATUALIZACAO, AJUDA, DEV
     }
 
     static final String OPT_BACKEND = "backend-url";
@@ -35,6 +35,9 @@ record Argumentos(Comando comando, Map<String, String> opcoes, List<String> posi
             Map.entry("--imprimir-teste", Comando.IMPRIMIR_TESTE),
             Map.entry("--instalar", Comando.INSTALAR),
             Map.entry("--desinstalar", Comando.DESINSTALAR),
+            Map.entry("--verificar-atualizacao", Comando.VERIFICAR_ATUALIZACAO),
+            Map.entry("--atualizar", Comando.ATUALIZAR),
+            Map.entry("--aplicar-atualizacao", Comando.APLICAR_ATUALIZACAO),
             Map.entry("--ajuda", Comando.AJUDA),
             Map.entry("--help", Comando.AJUDA),
             Map.entry("-h", Comando.AJUDA));
@@ -42,7 +45,7 @@ record Argumentos(Comando comando, Map<String, String> opcoes, List<String> posi
     private static final Set<String> FLAGS = Set.of(FLAG_SEM_BANDEJA, FLAG_VERBOSO);
     /** Quantos posicionais cada comando exige. */
     private static final Map<Comando, Integer> POSICIONAIS = Map.of(
-            Comando.PAREAR, 1, Comando.GERAR_PDF_TESTE, 1, Comando.IMPRIMIR_TESTE, 2);
+            Comando.PAREAR, 1, Comando.GERAR_PDF_TESTE, 1, Comando.IMPRIMIR_TESTE, 2, Comando.APLICAR_ATUALIZACAO, 1);
 
     static final String USO = """
             Uso: AgroEase-Agente-Impressao[-cli] [comando] [opções]
@@ -55,6 +58,8 @@ record Argumentos(Comando comando, Map<String, String> opcoes, List<String> posi
               --gerar-pdf-teste <arquivo.pdf>        gera um cupom 80 mm de teste
               --imprimir-teste <impressora> <pdf>    imprime pelo motor do agente
               --instalar | --desinstalar             ativa/desativa "iniciar com o sistema" (também ativado ao parear)
+              --verificar-atualizacao                consulta a release publicada e diz se há versão nova (não baixa nem instala)
+              --atualizar                            com o agente fechado: baixa a versão nova e aplica agora
             Opções: --backend-url <url>  --porta <n>  --dir-dados <pasta>  --sem-bandeja  --verboso
             """;
 

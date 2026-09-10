@@ -16,3 +16,6 @@ Thumbs.db
 
 # Saídas locais de spike/teste
 *.log
+
+# worktrees/sessões locais
+.claude/

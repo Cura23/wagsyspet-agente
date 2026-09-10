@@ -12,7 +12,6 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.FileTime;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -35,7 +34,9 @@ public final class ConfiguracaoLocalArquivo implements ConfiguracaoLocal {
 
     private final Path arquivo;
     private volatile String impressora;
-    private volatile FileTime lidoEm;
+    /** Conteúdo da última leitura: releitura por CONTEÚDO, não por mtime — duas escritas no mesmo tique do relógio do kernel
+     *  (poucos ms) têm o mesmo mtime e a segunda passaria despercebida (achado do F6-L1 no estado.json). O arquivo tem ~50 bytes. */
+    private volatile byte[] bytesLidos;
 
     public ConfiguracaoLocalArquivo(Path arquivo) {
         this.arquivo = Objects.requireNonNull(arquivo);
@@ -59,35 +60,33 @@ public final class ConfiguracaoLocalArquivo implements ConfiguracaoLocal {
         if (novo != null) {
             n.put(CAMPO_IMPRESSORA, novo);
         }
-        gravarAtomico(n.toPrettyString());
+        String json = n.toPrettyString();
+        gravarAtomico(json);
         impressora = novo;
-        lidoEm = mtime();
+        bytesLidos = json.getBytes(StandardCharsets.UTF_8);
     }
 
     private synchronized void recarregarSeMudou() {
-        FileTime atual = mtime();
-        if (Objects.equals(atual, lidoEm)) {
+        byte[] atual;
+        try {
+            atual = Files.exists(arquivo) ? Files.readAllBytes(arquivo) : null;
+        } catch (IOException e) {
+            log.warn("config.json ilegível em {} ({}); mantendo a última leitura", arquivo, e.toString());
             return;
         }
-        impressora = ler();
-        lidoEm = atual;
-    }
-
-    /** {@code null} quando o arquivo não existe (também é um "estado" que dispara releitura quando ele aparece). */
-    private FileTime mtime() {
-        try {
-            return Files.exists(arquivo) ? Files.getLastModifiedTime(arquivo) : null;
-        } catch (IOException e) {
-            return null;
+        if (java.util.Arrays.equals(atual, bytesLidos)) {
+            return;
         }
+        impressora = ler(atual);
+        bytesLidos = atual;
     }
 
-    private String ler() {
-        if (!Files.exists(arquivo)) {
+    private String ler(byte[] bytes) {
+        if (bytes == null) {
             return null;
         }
         try {
-            JsonNode n = JSON.readTree(Files.readString(arquivo, StandardCharsets.UTF_8));
+            JsonNode n = JSON.readTree(new String(bytes, StandardCharsets.UTF_8));
             String v = n.path(CAMPO_IMPRESSORA).asText(null);
             return v == null || v.isBlank() ? null : v;
         } catch (IOException | RuntimeException e) {
@@ -97,16 +96,6 @@ public final class ConfiguracaoLocalArquivo implements ConfiguracaoLocal {
     }
 
     private void gravarAtomico(String conteudo) throws IOException {
-        Path dir = arquivo.toAbsolutePath().getParent();
-        if (dir != null) {
-            Files.createDirectories(dir);
-        }
-        Path tmp = arquivo.resolveSibling(arquivo.getFileName() + ".tmp");
-        Files.writeString(tmp, conteudo, StandardCharsets.UTF_8);
-        try {
-            Files.move(tmp, arquivo, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, arquivo, StandardCopyOption.REPLACE_EXISTING);
-        }
+        br.com.wagner.wagsyspet.agente.core.atualizacao.EscritaAtomica.gravarTexto(arquivo, conteudo, false);
     }
 }

@@ -19,12 +19,17 @@ public interface ComandoExterno {
 
     /** Implementação real: stdout+stderr juntos, prazo de 20 s. */
     static ComandoExterno real() {
+        return real(Duration.ofSeconds(20));
+    }
+
+    /** Idem com prazo próprio (um upgrade MSI ou uma extração de 70 MB passam de 20 s). */
+    static ComandoExterno real(Duration prazo) {
         return comando -> {
             Process p = new ProcessBuilder(comando).redirectErrorStream(true).start();
             try {
-                if (!p.waitFor(Duration.ofSeconds(20).toMillis(), TimeUnit.MILLISECONDS)) {
+                if (!p.waitFor(prazo.toMillis(), TimeUnit.MILLISECONDS)) {
                     p.destroyForcibly();
-                    throw new IOException("comando não respondeu em 20 s: " + comando);
+                    throw new IOException("comando não respondeu em " + prazo.toSeconds() + " s: " + comando);
                 }
                 String texto = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
                 return new Saida(p.exitValue(), texto);

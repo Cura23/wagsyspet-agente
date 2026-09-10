@@ -75,7 +75,9 @@ class AgenteDesktopTest {
         Cliente(int porta, String origin) { super(URI.create("ws://127.0.0.1:" + porta), Map.of("Origin", origin)); }
         @Override public void onOpen(ServerHandshake h) { abriu.countDown(); }
         @Override public void onMessage(String m) { recebidas.add(m); }
-        @Override public void onClose(int c, String r, boolean remote) { }
+        final CountDownLatch fechou = new CountDownLatch(1);
+        volatile int codigoFechamento; volatile String motivoFechamento = "";
+        @Override public void onClose(int c, String r, boolean remote) { codigoFechamento = c; motivoFechamento = r == null ? "" : r; fechou.countDown(); }
         @Override public void onError(Exception e) { }
         JsonNode proxima() throws Exception {
             String m = recebidas.poll(5, TimeUnit.SECONDS);

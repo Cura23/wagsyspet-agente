@@ -655,6 +655,51 @@ class ContratoF3Test {
     }
 
     @Nested
+    @DisplayName("10c. ociosidade e fechamento para atualizar (F6-L1)")
+    class Atualizacao {
+        @Test
+        @DisplayName("ocioso() = nenhuma sessão autenticada aberta e fila vazia; pré-auth não conta; ociosoHa() zera ao autenticar")
+        void ocioso() throws Exception {
+            assertThat(servidor.ocioso()).isTrue();
+            ClienteTeste anonimo = ClienteTeste.conectarAberto(servidor.getPort(), ORIGIN);
+            anonimo.send(json("tipo", "hello", "versaoProtocolo", 1));
+            assertThat(anonimo.proximaMensagem().get("tipo").asText()).isEqualTo("hello_ok");
+            assertThat(servidor.ocioso()).as("conexão sem auth não é 'uso'").isTrue();
+            anonimo.close();
+
+            Thread.sleep(150);
+            assertThat(servidor.ociosoHa()).isGreaterThanOrEqualTo(Duration.ofMillis(100));
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            assertThat(servidor.ocioso()).isFalse();
+            assertThat(servidor.ociosoHa()).isEqualTo(Duration.ZERO);
+            c.close();
+            assertThat(c.esperarFechar(5)).isTrue();
+            Thread.sleep(100);
+            assertThat(servidor.ocioso()).isTrue();
+            assertThat(servidor.ociosoHa()).isLessThan(Duration.ofSeconds(2));
+        }
+
+        @Test
+        @DisplayName("fecharParaAtualizar(): todas as conexões recebem close 1001 'ATUALIZANDO' (sem nenhum frame sem id antes) e novas conexões são recusadas com o mesmo motivo")
+        void fecharParaAtualizar() throws Exception {
+            ClienteTeste autenticado = conectarEAutenticar(ORIGIN);
+            ClienteTeste anonimo = ClienteTeste.conectarAberto(servidor.getPort(), OUTRA_ORIGIN);
+            servidor.fecharParaAtualizar();
+            assertThat(autenticado.esperarFechar(5)).isTrue();
+            assertThat(autenticado.codigoFechamento.get()).isEqualTo(1001);
+            assertThat(autenticado.motivoFechamento.get()).isEqualTo("ATUALIZANDO");
+            assertThat(autenticado.recebidas).as("nenhum frame solto antes do close (o PWA casaria a um job pendente)").isEmpty();
+            assertThat(anonimo.esperarFechar(5)).isTrue();
+            assertThat(anonimo.motivoFechamento.get()).isEqualTo("ATUALIZANDO");
+            ClienteTeste depois = ClienteTeste.conectarAberto(servidor.getPort(), ORIGIN);
+            assertThat(depois.esperarFechar(5)).isTrue();
+            assertThat(depois.codigoFechamento.get()).isEqualTo(1001);
+            assertThat(depois.motivoFechamento.get()).isEqualTo("ATUALIZANDO");
+            assertThat(servidor.ocioso()).isTrue();
+        }
+    }
+
+    @Nested
     @DisplayName("10b. teto de conexões simultâneas (8 em produção)")
     class TetoDeConexoes {
         @Test

@@ -164,6 +164,8 @@ final class ComandosPareamento {
         }
         out.println("Impressora deste computador: " + new ConfiguracaoLocalArquivo(dirs.config()).impressoraSelecionada().orElse("(nenhuma escolhida)"));
         out.println("Iniciar com o sistema: " + ComandosAutostart.padrao(out, err).linhaStatus());
+        out.println("Atualização automática: " + br.com.wagner.wagsyspet.agente.core.atualizacao.GerenteAtualizacao.resumo(
+                new br.com.wagner.wagsyspet.agente.core.atualizacao.EstadoAtualizacao(dirs.atualizacao().resolve("estado.json")), java.time.Clock.systemUTC()));
         return SAIDA_OK;
     }
 }

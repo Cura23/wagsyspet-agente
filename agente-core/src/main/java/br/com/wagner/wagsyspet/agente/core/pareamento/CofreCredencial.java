@@ -157,16 +157,7 @@ public final class CofreCredencial {
     }
 
     private static void gravarAtomico(Path destino, byte[] conteudo) throws IOException {
-        Path tmp = destino.resolveSibling(destino.getFileName() + ".tmp");
-        Files.write(tmp, conteudo);
-        if (DiretoriosDoAgente.suportaPosix(tmp)) {
-            Files.setPosixFilePermissions(tmp, DiretoriosDoAgente.SO_DONO_ARQUIVO);
-        }
-        try {
-            Files.move(tmp, destino, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tmp, destino, StandardCopyOption.REPLACE_EXISTING);
-        }
+        br.com.wagner.wagsyspet.agente.core.atualizacao.EscritaAtomica.gravar(destino, conteudo, true); // 0600: é segredo
     }
 
     private static void moverCorrompido(Path arq) {

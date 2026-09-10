@@ -58,6 +58,9 @@ public final class JanelaStatus implements Superficie {
         botoes.add(botao("Impressora…", acoes::escolherImpressora));
         botoes.add(botao("Imprimir teste", acoes::imprimirTeste));
         botoes.add(botao("Ver log", acoes::verLog));
+        botaoAtualizar = botao("Atualizar…", acoes::atualizar);
+        botaoAtualizar.setEnabled(false);
+        botoes.add(botaoAtualizar);
         botoes.add(botao("Desparear…", acoes::desparear));
         botoes.add(botao("Sair", acoes::sair));
 
@@ -75,6 +78,18 @@ public final class JanelaStatus implements Superficie {
         frame.setLocationByPlatform(true);
         frame.setVisible(true);
         log.info("Janela de status aberta (sem bandeja do sistema neste ambiente)");
+    }
+
+    private JButton botaoAtualizar;
+
+    @Override
+    public void atualizacao(java.util.Optional<String> versaoDisponivel) {
+        SwingUtilities.invokeLater(() -> {
+            if (botaoAtualizar != null) {
+                botaoAtualizar.setEnabled(versaoDisponivel.isPresent());
+                botaoAtualizar.setText(versaoDisponivel.map(v -> "Atualizar para " + v + "…").orElse("Atualizar…"));
+            }
+        });
     }
 
     private static JButton botao(String rotulo, Runnable acao) {
