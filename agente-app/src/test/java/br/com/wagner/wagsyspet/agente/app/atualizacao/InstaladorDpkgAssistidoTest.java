@@ -48,7 +48,7 @@ class InstaladorDpkgAssistidoTest {
         assertThat(r.ok()).isTrue();
         assertThat(cmd.chamadas).hasSize(1);
         assertThat(cmd.chamadas.get(0)).containsExactly("pkexec", "--disable-internal-agent", "dpkg", "-i", tmp.resolve("n.deb").toString());
-        assertThat(r.launcherNovo()).map(Path::toString).contains("/opt/agroease-agente-impressao/bin/AgroEase-Agente-Impressao");
+        assertThat(r.launcherNovo()).contains(Path.of("/opt/agroease-agente-impressao/bin/AgroEase-Agente-Impressao"));
     }
 
     @Test

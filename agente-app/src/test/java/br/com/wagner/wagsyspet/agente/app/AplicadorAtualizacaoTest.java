@@ -42,12 +42,12 @@ class AplicadorAtualizacaoTest {
         PlanoAtualizacao p = plano(tmp);
         Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
         p.gravar(arquivoPlano);
-        List<String> relancados = new ArrayList<>();
+        List<Path> relancados = new ArrayList<>();
         AplicadorAtualizacao a = new AplicadorAtualizacao(new PrintStream(new ByteArrayOutputStream()),
                 plano -> new AplicadorAtualizacao.Instalador.Resultado(true, "instalado", Optional.of(Path.of("/novo/launcher"))),
-                launcher -> relancados.add(launcher.toString()), Duration.ofSeconds(2));
+                relancados::add, Duration.ofSeconds(2));
         assertThat(a.aplicar(arquivoPlano)).isZero();
-        assertThat(relancados).containsExactly("/novo/launcher");
+        assertThat(relancados).containsExactly(Path.of("/novo/launcher")); // como Path: no Windows a string vira \\novo\\launcher
         assertThat(Files.exists(arquivoPlano)).as("plano consumido").isFalse();
         assertThat(estado.ler().emAplicacao()).as("quem confirma é o agente novo, pela saúde").isPresent();
     }
@@ -61,13 +61,13 @@ class AplicadorAtualizacaoTest {
         PlanoAtualizacao p = plano(tmp);
         Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
         p.gravar(arquivoPlano);
-        List<String> relancados = new ArrayList<>();
+        List<Path> relancados = new ArrayList<>();
         ByteArrayOutputStream saida = new ByteArrayOutputStream();
         AplicadorAtualizacao a = new AplicadorAtualizacao(new PrintStream(saida, true, StandardCharsets.UTF_8),
                 plano -> new AplicadorAtualizacao.Instalador.Resultado(false, "msiexec 1603", Optional.empty()),
-                launcher -> relancados.add(launcher.toString()), Duration.ofSeconds(2));
+                relancados::add, Duration.ofSeconds(2));
         assertThat(a.aplicar(arquivoPlano)).isEqualTo(Main.SAIDA_FALHA);
-        assertThat(relancados).containsExactly(tmp.resolve("bin/AgroEase-Agente-Impressao").toString());
+        assertThat(relancados).containsExactly(tmp.resolve("bin/AgroEase-Agente-Impressao"));
         EstadoAtualizacao.Estado e = estado.ler();
         assertThat(e.emAplicacao()).isEmpty();
         assertThat(e.recusada()).map(EstadoAtualizacao.Recusada::versao).contains("9.9.9");
@@ -84,10 +84,10 @@ class AplicadorAtualizacaoTest {
         Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
         plano(tmp).gravar(arquivoPlano);
         try (TravaDeInstancia ocupada = TravaDeInstancia.tentar(dirs.lock()).orElseThrow()) {
-            List<String> relancados = new ArrayList<>();
+            List<Path> relancados = new ArrayList<>();
             AplicadorAtualizacao a = new AplicadorAtualizacao(new PrintStream(new ByteArrayOutputStream()),
                     plano -> { throw new AssertionError("não devia aplicar com o agente vivo"); },
-                    launcher -> relancados.add(launcher.toString()), Duration.ofMillis(400));
+                    relancados::add, Duration.ofMillis(400));
             assertThat(a.aplicar(arquivoPlano)).isEqualTo(Main.SAIDA_FALHA);
             assertThat(relancados).isEmpty();
         }

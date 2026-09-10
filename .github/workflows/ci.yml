@@ -285,7 +285,8 @@ jobs:
           openssl pkeyutl -sign -inkey "$SMK/priv.pem" -rawin -in "$SMK/art/latest.json" -out "$SMK/art/latest.json.sig"
           PUB=$(openssl pkey -in "$SMK/priv.pem" -pubout | grep -v -- '-----' | tr -d '\n')
           (cd "$SMK/art" && python3 -m http.server 8770 --bind 127.0.0.1 >/dev/null 2>&1 &)
-          sleep 2; curl -sf http://127.0.0.1:8770/latest.json | head -c 200; echo
+          for i in $(seq 1 30); do curl -sf --max-time 3 http://127.0.0.1:8770/latest.json >/dev/null 2>&1 && break; sleep 1; done
+          curl -sf --max-time 5 http://127.0.0.1:8770/latest.json | head -c 200; echo
           echo "== 4) --atualizar pelo binário INSTALADO (sem tela: o agente relançado só orienta e sai)"
           export AGROEASE_AGENTE_DIR="$SMK/dados"
           export JAVA_TOOL_OPTIONS="-Duser.home=$SMK/home -Dagente.release.manifesto.url=http://127.0.0.1:8770/latest.json -Dagente.release.chave.publica=$PUB"
