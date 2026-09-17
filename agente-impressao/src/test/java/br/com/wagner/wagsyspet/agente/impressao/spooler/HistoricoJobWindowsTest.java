@@ -83,10 +83,34 @@ class HistoricoJobWindowsTest {
     }
 
     @Test
-    @DisplayName("nunca visto: enquanto ninguém olhou a fila → PENDENTE sem motivo (ainda pode aparecer); fila olhada e o job NUNCA esteve lá → DESCONHECIDO{SUMIU_DA_FILA} — jamais 'impresso' por palpite")
+    @DisplayName("SUMIU sem imprimir não pode virar IMPRESSO (adversarial L4): se a ÚLTIMA foto mostrava o job parado/com problema (OFFLINE, PAPEROUT, PAUSED, ERROR, intervenção, Status 0 = fila pausada) ou a impressora estava pausada/offline, ele não estava sendo entregue — sumir = operador cancelou/limpou a fila (o DELETING de um job que não está imprimindo não dura uma foto) → DESCONHECIDO{SUMIU_DA_FILA}")
+    void sumiuSemEstarImprimindo() {
+        for (int ultimo : new int[]{JOB_STATUS_OFFLINE, JOB_STATUS_PAPEROUT, JOB_STATUS_PAUSED, JOB_STATUS_PRINTING | JOB_STATUS_ERROR, JOB_STATUS_USER_INTERVENTION, 0}) {
+            HistoricoJobWindows h = new HistoricoJobWindows("x");
+            h.visto(70, ultimo);
+            h.ausente();
+            EstadoSpooler e = h.estado(0);
+            assertThat(e.estado()).as("último status 0x%x", ultimo).isEqualTo(Estado.DESCONHECIDO);
+            assertThat(e.motivo()).isEqualTo(Motivo.SUMIU_DA_FILA);
+            assertThat(e.encerrado()).isTrue();
+        }
+        HistoricoJobWindows filaPausada = new HistoricoJobWindows("x");
+        filaPausada.visto(71, JOB_STATUS_SPOOLING);
+        filaPausada.statusDaImpressora(PRINTER_STATUS_OFFLINE);
+        filaPausada.ausente();
+        assertThat(filaPausada.estado(0).estado()).as("impressora offline na última foto").isEqualTo(Estado.DESCONHECIDO);
+    }
+
+    @Test
+    @DisplayName("'nunca apareceu na fila' só vale DEPOIS que o print() retornou (adversarial L4): o acompanhamento é armado ANTES do StartDoc e, em impressora de rede/1ª impressão a frio, o job leva mais de 1 s para existir — antes de submetido() ausência nenhuma conta; depois, 20+ fotos sem nunca ver → DESCONHECIDO{SUMIU_DA_FILA}")
     void nuncaVisto() {
         HistoricoJobWindows h = new HistoricoJobWindows("x");
-        assertThat(h.estado(0).estado()).isEqualTo(Estado.PENDENTE);
+        for (int i = 0; i < 500; i++) {
+            h.ausente();
+        }
+        assertThat(h.estado(0).estado()).as("print() ainda não retornou: o job pode nem existir").isEqualTo(Estado.PENDENTE);
+        assertThat(h.estado(0).encerrado()).isFalse();
+        h.submetido();
         h.ausente();
         assertThat(h.estado(0).estado()).as("1 olhada sem ver pode ser só cedo demais").isEqualTo(Estado.PENDENTE);
         for (int i = 0; i < HistoricoJobWindows.AUSENCIAS_ATE_DESISTIR; i++) {

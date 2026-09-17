@@ -75,6 +75,7 @@ class ImpressaoRealEnvTest {
             assertThat(lista.get("nomes")).extracting(JsonNode::asText).contains(virtual);
             System.out.println("[E2E] impressoras=" + lista.get("nomes"));
 
+            c.verEstadoDaImpressao = true; // este teste é o PWA NOVO: enxerga o push do estado do spooler
             String id = "e2e" + UUID.randomUUID().toString().substring(0, 8);
             Instant antes = Instant.now().minusSeconds(1);
             String pdf = Base64.getEncoder().encodeToString(cupom80mm("AGROEASE - TESTE E2E", "job " + id, "SO " + System.getProperty("os.name")));
@@ -92,6 +93,7 @@ class ImpressaoRealEnvTest {
             assertThat(estado.get("id").asText()).isEqualTo(id);
             assertThat(estado.get("estado").asText()).as("detalhe: %s", estado.get("detalhe")).isEqualTo("IMPRESSO");
             assertThat(estado.get("encerrado").asBoolean()).isTrue();
+            assertThat(estado.get("origem").asText()).isEqualTo("push");
             // e o pull devolve o mesmo, como o PWA faria por outra conexão
             c.send("{\"tipo\":\"consultar_impressao\",\"id\":\"" + id + "\"}");
             assertThat(c.proximaMensagem(10).get("estado").asText()).isEqualTo("IMPRESSO");

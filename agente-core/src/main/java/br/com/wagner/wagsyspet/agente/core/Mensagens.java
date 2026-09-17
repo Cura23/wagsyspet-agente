@@ -51,15 +51,19 @@ final class Mensagens {
     }
 
     /** {@code estado_impressao}: push {@code impressao_estado} + pull {@code consultar_impressao}; {@code atualizacao}: fecha 1001 'ATUALIZANDO'. */
+    static final String ORIGEM_PUSH = "push";
+    static final String ORIGEM_CONSULTA = "consulta";
+
     static final java.util.List<String> CAPACIDADES = java.util.List.of("estado_impressao", "atualizacao");
 
     /**
-     * {@code impressao_estado{id, estado, motivo?, detalhe, encerrado}} — o que o SPOOLER disse do job depois do aceite (F6 D9).
+     * {@code impressao_estado{id, origem:'push'|'consulta', estado, motivo?, detalhe, encerrado}} — o que o SPOOLER disse do job depois do aceite (F6 D9).
      * {@code motivo} só quando existe (o parser do PWA é por tipo: nada de null no fio).
      */
-    static String impressaoEstado(String id, br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler e) {
+    static String impressaoEstado(String id, br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler e, String origem) {
         ObjectNode n = base("impressao_estado");
         n.put("id", id);
+        n.put("origem", origem); // push e resposta de consulta são o mesmo tipo com o mesmo id: é isto que os distingue no PWA
         n.put("estado", e.estado().name());
         if (e.motivo() != null) {
             n.put("motivo", e.motivo().name());

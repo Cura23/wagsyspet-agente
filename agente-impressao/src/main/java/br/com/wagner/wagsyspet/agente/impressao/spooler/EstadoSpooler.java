@@ -24,7 +24,13 @@ public record EstadoSpooler(Estado estado, Motivo motivo, String detalhe, boolea
 
     public enum Motivo {
         CANCELADO, ABORTADO, ERRO_DRIVER, IMPRESSORA_OFFLINE, SEM_PAPEL, TAMPA_ABERTA, FILA_PARADA, INTERVENCAO,
-        SUMIU_DA_FILA, CONSULTA_INDISPONIVEL, SEM_SUPORTE, SEM_REGISTRO
+        SUMIU_DA_FILA, CONSULTA_INDISPONIVEL, SEM_SUPORTE,
+        /** O agente NUNCA viu este id (ou já expirou da memória) — só isso. */
+        SEM_REGISTRO,
+        /** O agente recebeu o pedido e o motor ainda não respondeu (na fila do agente ou dentro do spooler) — NÃO reimprimir. */
+        EM_ENVIO,
+        /** O spooler recusou o job (o PWA já recebeu imprimir_erro). */
+        NAO_ACEITO
     }
 
     public EstadoSpooler {

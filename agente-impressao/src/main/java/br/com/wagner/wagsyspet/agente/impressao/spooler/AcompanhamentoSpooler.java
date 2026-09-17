@@ -10,6 +10,13 @@ public interface AcompanhamentoSpooler extends AutoCloseable {
     /** Estado corrente. Tempo LIMITADO (cada consulta tem prazo) e nunca lança. Depois de um estado encerrado, devolve sempre o mesmo. */
     EstadoSpooler consultar();
 
+    /**
+     * O motor terminou de submeter (o {@code print()} retornou): a partir daqui o job COM CERTEZA existiu no spooler. Quem é armado
+     * antes da submissão (Windows) só pode concluir "nunca apareceu na fila" depois disto.
+     */
+    default void submetido() {
+    }
+
     /** Solta o que houver de nativo (handles do Windows). Idempotente. */
     @Override
     default void close() {

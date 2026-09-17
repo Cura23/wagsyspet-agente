@@ -44,20 +44,25 @@ class ClassificadorCupsTest {
         assertThat(cancelado.motivo()).isEqualTo(Motivo.CANCELADO);
         assertThat(cancelado.encerrado()).isTrue();
 
-        String abortado = fixture("completos-cancelado.txt").replace("job-canceled-by-user", "job-aborted-by-system");
+        // (sintético sobre a fixture real: a keyword do CUPS é 'aborted-by-system', sem o prefixo job-)
+        String abortado = fixture("completos-cancelado.txt").replace("job-canceled-by-user", "aborted-by-system");
         assertThat(ClassificadorCups.classificar("AGROEASE_TESTE_MORTA-49", "", abortado, "").motivo()).isEqualTo(Motivo.ABORTADO);
-        String comErros = fixture("completos-cancelado.txt").replace("job-canceled-by-user", "job-completed-with-errors");
-        assertThat(ClassificadorCups.classificar("AGROEASE_TESTE_MORTA-49", "", comErros, "").motivo()).isEqualTo(Motivo.ERRO_DRIVER);
+        // erro de filtro/driver: o CUPS PARA o job (IPP stopped) e ele continua em NOT-completed com 'job-completed-with-errors' —
+        // não vai sair sozinho → FALHOU{ERRO_DRIVER} (sintético sobre a fixture real de not-completed)
+        String comErros = fixture("nao-completos-fila-parada.txt").replace("Alerts: none", "Alerts: job-completed-with-errors");
+        EstadoSpooler filtro = ClassificadorCups.classificar("AGROEASE_TESTE_MORTA-50", comErros, "", fixture("impressora-ociosa.txt"));
+        assertThat(filtro.estado()).isEqualTo(Estado.FALHOU);
+        assertThat(filtro.motivo()).isEqualTo(Motivo.ERRO_DRIVER);
     }
 
     @Test
-    @DisplayName("CUPS real (achado do teste de integração): job cancelado ANTES de começar a processar termina com 'Alerts: none' — sem job-canceled-by-user. Todo job impresso traz job-completed-successfully; terminou SEM isso = NÃO imprimiu → FALHOU{CANCELADO}, nunca 'desconhecido' (o operador precisa do 'confira antes de reimprimir')")
-    void canceladoAntesDeProcessar() {
-        EstadoSpooler e = ClassificadorCups.classificar("AGROEASE_PARADA-54", "", fixture("completos-cancelado-antes-de-processar.txt"), "");
-        assertThat(e.estado()).isEqualTo(Estado.FALHOU);
-        assertThat(e.motivo()).isEqualTo(Motivo.CANCELADO);
-        assertThat(e.encerrado()).isTrue();
-        assertThat(e.detalhe()).containsIgnoringCase("sem registro de conclusão");
+    @DisplayName("lpstat é a RESERVA (só quando o IPP local não responde) e é CONSERVADOR: razão terminal que ele não reconhece — 'Alerts: none' (CUPS 2.4.10: cancelado antes de processar) ou 'processing-to-stop-point' (CUPS < 2.4.8: job IMPRESSO com sucesso, Issue #832) — é DESCONHECIDO, nunca FALHOU nem IMPRESSO: pelo texto as duas coisas são indistinguíveis")
+    void razaoTerminalNaoReconhecida() {
+        EstadoSpooler none = ClassificadorCups.classificar("AGROEASE_PARADA-54", "", fixture("completos-cancelado-antes-de-processar.txt"), "");
+        assertThat(none.estado()).isEqualTo(Estado.DESCONHECIDO);
+        assertThat(none.encerrado()).isTrue();
+        String antigo = fixture("completos-sucesso.txt").replace("job-completed-successfully", "processing-to-stop-point");
+        assertThat(ClassificadorCups.classificar("PDF-48", "", antigo, "").estado()).isEqualTo(Estado.DESCONHECIDO);
     }
 
     @Test

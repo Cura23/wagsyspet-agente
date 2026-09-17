@@ -97,7 +97,7 @@ class ImpressoraCupsLpTest {
 
         var semId = ImpressoraCupsLp.interpretar(0, "saída que não é a do lp", "PDF", "AgroEase cupom x", ImpressoraJavaxPrint.ModoPapel.PAPEL_DO_DRIVER);
         org.assertj.core.api.Assertions.assertThat(semId.acompanhamento().orElseThrow().consultar().motivo())
-                .isEqualTo(br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.SEM_REGISTRO);
+                .isEqualTo(br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.CONSULTA_INDISPONIVEL);
 
         var recusado = ImpressoraCupsLp.interpretar(1, "lp: Error - The printer or class does not exist.", "X", "j", ImpressoraJavaxPrint.ModoPapel.PAPEL_DO_DRIVER);
         org.assertj.core.api.Assertions.assertThat(recusado.acompanhamento()).isEmpty();

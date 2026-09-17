@@ -81,7 +81,7 @@ final class ObservadorImpressao implements AutoCloseable {
             return;
         }
         abertos.add(acompanhamento);
-        guardar(id, EstadoSpooler.pendente(null, "observando o spooler"));
+        guardar(id, EstadoSpooler.pendente(null, "aceito pelo spooler; observando"));
         Observacao o = new Observacao(id, acompanhamento, aoEncerrar);
         try {
             executor.execute(o);
@@ -90,9 +90,19 @@ final class ObservadorImpressao implements AutoCloseable {
         }
     }
 
+    /**
+     * O servidor conhece o id desde a SUBMISSÃO (adversarial L4): antes de o motor responder o pull tem de dizer "em envio, não encerrado"
+     * — responder "sem registro, encerrado" e depois mudar de ideia liberava a reimpressão de um cupom que ainda ia sair.
+     */
+    void registrar(String id, EstadoSpooler estado) {
+        guardar(id, estado);
+    }
+
     /** O motor aceitou o job mas não sabe acompanhar (ex.: JNA indisponível): o pull responde isso, sem aviso. */
-    void semAcompanhamento(String id, String detalhe) {
-        guardar(id, EstadoSpooler.desconhecido(Motivo.SEM_SUPORTE, detalhe));
+    EstadoSpooler semAcompanhamento(String id, String detalhe) {
+        EstadoSpooler e = EstadoSpooler.desconhecido(Motivo.SEM_SUPORTE, detalhe);
+        guardar(id, e);
+        return e;
     }
 
     /** Estado corrente do id; nunca observado/expirado → DESCONHECIDO{SEM_REGISTRO}. */

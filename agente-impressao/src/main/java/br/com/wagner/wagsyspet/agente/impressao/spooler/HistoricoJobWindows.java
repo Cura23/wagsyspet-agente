@@ -12,9 +12,13 @@ import java.util.List;
  * <ul>
  *   <li>{@code PRINTED}/{@code COMPLETE} visto → IMPRESSO ("sent to the printer, but may not be printed yet" — dados entregues);</li>
  *   <li>{@code DELETING}/{@code DELETED} SEM {@code PRINTED} antes → FALHOU{CANCELADO};</li>
- *   <li>visto (spoolando/imprimindo) e depois ausente, sem sinal de cancelamento → IMPRESSO (o caminho normal);</li>
+ *   <li>visto SPOOLANDO/IMPRIMINDO sem queixa e depois ausente → IMPRESSO (o caminho normal). Se a última foto mostrava o job parado ou
+ *       com problema (ou a impressora pausada/offline), ele não estava sendo entregue: sumir = cancelado/fila limpa (o {@code DELETING}
+ *       de um job que não está imprimindo não dura uma foto) → DESCONHECIDO{SUMIU_DA_FILA}, nunca "impresso" por inferência;</li>
  *   <li>na fila → PENDENTE com o motivo do job ou da impressora; {@code ERROR} é transitório no spooler (retry) → PENDENTE, não FALHOU;</li>
- *   <li>fila olhada {@value #AUSENCIAS_ATE_DESISTIR}+ vezes sem NUNCA ver o job → DESCONHECIDO{SUMIU_DA_FILA}.</li>
+ *   <li>DEPOIS de {@link #submetido()} (o {@code print()} retornou), fila olhada {@value #AUSENCIAS_ATE_DESISTIR}+ vezes sem NUNCA ver o
+ *       job → DESCONHECIDO{SUMIU_DA_FILA}. Antes disso nenhuma ausência conta: o acompanhamento é armado antes do {@code StartDoc} e,
+ *       em impressora de rede ou na 1ª impressão a frio, o job demora mais de 1 s para existir.</li>
  * </ul>
  * Thread-safe por {@code synchronized}: quem olha a fila é uma thread, quem consulta é outra.
  */
@@ -54,7 +58,15 @@ public final class HistoricoJobWindows {
     private boolean presente;
     private int ultimoStatus;
     private int ausenciasSemVer;
+    private boolean submetido;
+    private int statusImpressoraNaUltimaFoto;
     private String falha;
+
+    private static final int JOB_COM_PROBLEMA = JOB_STATUS_PAUSED | JOB_STATUS_ERROR | JOB_STATUS_OFFLINE | JOB_STATUS_PAPEROUT
+            | JOB_STATUS_BLOCKED_DEVQ | JOB_STATUS_USER_INTERVENTION;
+    private static final int IMPRESSORA_COM_PROBLEMA = PRINTER_STATUS_PAUSED | PRINTER_STATUS_ERROR | PRINTER_STATUS_PAPER_JAM
+            | PRINTER_STATUS_PAPER_OUT | PRINTER_STATUS_OFFLINE | PRINTER_STATUS_NOT_AVAILABLE | PRINTER_STATUS_USER_INTERVENTION
+            | PRINTER_STATUS_DOOR_OPEN;
 
     public HistoricoJobWindows(String documento) {
         this.documento = documento;
@@ -79,9 +91,19 @@ public final class HistoricoJobWindows {
     public synchronized void ausente() {
         presente = false;
         falha = null;
-        if (!visto) {
+        if (!visto && submetido) {
             ausenciasSemVer++;
         }
+    }
+
+    /** O {@code print()} retornou: o job existiu com certeza; só agora "nunca apareceu" pode ser conclusão. */
+    public synchronized void submetido() {
+        submetido = true;
+    }
+
+    /** {@code PRINTER_INFO_2.Status} lido junto da última foto em que o job estava na fila. */
+    public synchronized void statusDaImpressora(int status) {
+        statusImpressoraNaUltimaFoto = status;
     }
 
     public synchronized void falhaDeConsulta(String detalhe) {
@@ -98,7 +120,14 @@ public final class HistoricoJobWindows {
             return EstadoSpooler.falhou(Motivo.CANCELADO, quem + " " + bits(ultimoStatus) + " — apagado da fila antes de imprimir");
         }
         if (visto && !presente) {
-            return EstadoSpooler.impresso(quem + " saiu da fila depois de " + bits(ultimoStatus) + " — dados entregues ao dispositivo");
+            boolean entregando = (ultimoStatus & (JOB_STATUS_SPOOLING | JOB_STATUS_PRINTING)) != 0
+                    && (ultimoStatus & JOB_COM_PROBLEMA) == 0
+                    && (statusImpressoraNaUltimaFoto & IMPRESSORA_COM_PROBLEMA) == 0;
+            if (entregando) {
+                return EstadoSpooler.impresso(quem + " saiu da fila depois de " + bits(ultimoStatus) + " — dados entregues ao dispositivo");
+            }
+            return EstadoSpooler.desconhecido(Motivo.SUMIU_DA_FILA, quem + " saiu da fila SEM estar imprimindo (último estado " + bits(ultimoStatus)
+                    + (statusImpressoraNaUltimaFoto == 0 ? "" : ", impressora=0x" + Integer.toHexString(statusImpressoraNaUltimaFoto)) + ") — cancelado ou fila limpa?");
         }
         if (falha != null && !presente) {
             return new EstadoSpooler(EstadoSpooler.Estado.DESCONHECIDO, Motivo.CONSULTA_INDISPONIVEL, quem + ": " + falha, false);

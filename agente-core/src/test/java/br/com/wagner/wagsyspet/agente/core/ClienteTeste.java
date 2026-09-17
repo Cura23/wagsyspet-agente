@@ -77,7 +77,21 @@ final class ClienteTeste extends WebSocketClient {
     }
 
     @Override public void onOpen(ServerHandshake h) { abriu.countDown(); }
-    @Override public void onMessage(String message) { recebidas.add(message); }
+    /**
+     * F6-L4: por padrão este cliente se comporta como o PWA F2/F3 EM PRODUÇÃO, que IGNORA o tipo novo {@code impressao_estado}
+     * ({@code parseMsgDoAgente} devolve null para tipo desconhecido) — assim os casos do contrato antigo seguem valendo com o push
+     * não solicitado no meio. Os casos do L4 ligam isto para enxergar o push.
+     */
+    volatile boolean verEstadoDaImpressao;
+    final java.util.concurrent.atomic.AtomicInteger pushesDeEstadoIgnorados = new java.util.concurrent.atomic.AtomicInteger();
+
+    @Override public void onMessage(String message) {
+        if (!verEstadoDaImpressao && message.contains("\"tipo\":\"impressao_estado\"") && message.contains("\"origem\":\"push\"")) {
+            pushesDeEstadoIgnorados.incrementAndGet();
+            return;
+        }
+        recebidas.add(message);
+    }
 
     @Override public void onClose(int code, String reason, boolean remote) {
         codigoFechamento.set(code);

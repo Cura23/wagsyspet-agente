@@ -115,6 +115,9 @@ public final class ImpressoraJavaxPrint {
             }
             job.print(); // silencioso: nenhum diálogo; lança PrinterException se o spooler recusar
             aceito = true;
+            if (acompanhamento != null) {
+                acompanhamento.submetido(); // só agora "nunca apareceu na fila" pode ser conclusão
+            }
             return new Resultado(Resultado.Estado.ACEITO_SPOOLER, servico.get().getName(),
                     "Job '" + nomeJob + "' aceito pelo spooler (" + documento.getNumberOfPages() + " pág., modo " + modo + ")", acompanhamento);
         } catch (PrinterException e) {

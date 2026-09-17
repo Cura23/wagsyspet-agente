@@ -101,4 +101,20 @@ class AcompanhamentoWindowsTest {
             assertThat(AcompanhamentoWindows.armar("Impressora Qualquer", DOC)).isEmpty();
         }
     }
+
+    @Test
+    @DisplayName("armado ANTES do print(): fotos sem o job não encerram nada enquanto o motor não avisar submetido() — e o job que aparece depois (impressora de rede lenta) é visto normalmente")
+    void ausenciasAntesDeSubmeterNaoEncerram() {
+        FilaFalsa fila = new FilaFalsa();
+        AcompanhamentoWindows a = new AcompanhamentoWindows(DOC, fila);
+        for (int i = 0; i < 200; i++) {
+            assertThat(a.olhar()).as("foto %d", i).isTrue();
+        }
+        assertThat(a.consultar().estado()).isEqualTo(Estado.PENDENTE);
+        assertThat(fila.fechada).isFalse();
+        fila.roteiro.add(List.of(new JobNaFila(11, DOC, JOB_STATUS_PRINTING | JOB_STATUS_PRINTED)));
+        a.submetido();
+        a.olhar();
+        assertThat(a.consultar().estado()).isEqualTo(Estado.IMPRESSO);
+    }
 }

@@ -16,6 +16,12 @@ class AcompanhamentoCupsTest {
 
     private static final String JOB = "PDF-12                  lojista           1024   Thu Sep 17 09:56:10 2026\n\tStatus: \n\tAlerts: %s\n\tqueued for PDF\n";
 
+    /** cupsd sem IPP em localhost:631 (só o socket de domínio, CUPS_SERVER remoto…): tudo cai na reserva lpstat. */
+    private static final AcompanhamentoCups.FonteIpp SEM_IPP = new AcompanhamentoCups.FonteIpp() {
+        @Override public java.util.Optional<ClienteIppCups.Job> job(int numero) throws java.io.IOException { throw new java.io.IOException("Connection refused"); }
+        @Override public java.util.Optional<ClienteIppCups.Fila> fila(String nome) throws java.io.IOException { throw new java.io.IOException("Connection refused"); }
+    };
+
     /** lpstat falso: responde pelo argumento depois de -W (ou "-p"). */
     private static final class LpstatFalso implements Function<List<String>, ComandoSpooler.Saida> {
         final List<List<String>> chamadas = new ArrayList<>();
@@ -45,7 +51,7 @@ class AcompanhamentoCupsTest {
     void ordemEArgumentos() {
         LpstatFalso lpstat = new LpstatFalso();
         lpstat.completos = JOB.formatted("job-completed-successfully");
-        AcompanhamentoCups a = new AcompanhamentoCups("PDF", "PDF-12", lpstat);
+        AcompanhamentoCups a = new AcompanhamentoCups("PDF", "PDF-12", SEM_IPP, lpstat);
         EstadoSpooler e = a.consultar();
         assertThat(e.estado()).isEqualTo(Estado.IMPRESSO);
         assertThat(lpstat.chamadas.get(0)).containsExactly("/usr/bin/lpstat", "-W", "not-completed", "-l", "-o", "PDF");
@@ -59,7 +65,7 @@ class AcompanhamentoCupsTest {
         LpstatFalso lpstat = new LpstatFalso();
         lpstat.naoCompletos = JOB.formatted("none");
         lpstat.impressora = "printer PDF disabled since Thu Sep 17 09:56:17 2026 -\n\tPaused\n\tAlerts: paused\n";
-        AcompanhamentoCups a = new AcompanhamentoCups("PDF", "PDF-12", lpstat);
+        AcompanhamentoCups a = new AcompanhamentoCups("PDF", "PDF-12", SEM_IPP, lpstat);
         EstadoSpooler e = a.consultar();
         assertThat(e.estado()).isEqualTo(Estado.PENDENTE);
         assertThat(e.motivo()).isEqualTo(Motivo.FILA_PARADA);
@@ -78,19 +84,34 @@ class AcompanhamentoCupsTest {
     void consultaIndisponivelESemId() {
         LpstatFalso lpstat = new LpstatFalso();
         lpstat.falha = new ComandoSpooler.Saida(1, "lpstat: Scheduler is not running.", false);
-        EstadoSpooler fora = new AcompanhamentoCups("PDF", "PDF-12", lpstat).consultar();
+        EstadoSpooler fora = new AcompanhamentoCups("PDF", "PDF-12", SEM_IPP, lpstat).consultar();
         assertThat(fora.estado()).isEqualTo(Estado.DESCONHECIDO);
         assertThat(fora.motivo()).isEqualTo(Motivo.CONSULTA_INDISPONIVEL);
         assertThat(fora.encerrado()).isFalse();
         assertThat(fora.detalhe()).contains("Scheduler is not running");
 
         lpstat.falha = new ComandoSpooler.Saida(-1, "", true);
-        assertThat(new AcompanhamentoCups("PDF", "PDF-12", lpstat).consultar().motivo()).isEqualTo(Motivo.CONSULTA_INDISPONIVEL);
+        assertThat(new AcompanhamentoCups("PDF", "PDF-12", SEM_IPP, lpstat).consultar().motivo()).isEqualTo(Motivo.CONSULTA_INDISPONIVEL);
 
         LpstatFalso intocado = new LpstatFalso();
-        EstadoSpooler semId = new AcompanhamentoCups("PDF", "?", intocado).consultar();
-        assertThat(semId.motivo()).isEqualTo(Motivo.SEM_REGISTRO);
+        EstadoSpooler semId = new AcompanhamentoCups("PDF", "?", SEM_IPP, intocado).consultar();
+        assertThat(semId.motivo()).as("o job FOI aceito; só não dá para consultá-lo — SEM_REGISTRO é só para id que o agente nunca viu").isEqualTo(Motivo.CONSULTA_INDISPONIVEL);
         assertThat(semId.encerrado()).isTrue();
         assertThat(intocado.chamadas).isEmpty();
+    }
+
+    @Test
+    @DisplayName("IPP responde → é ele que manda (número do job = sufixo do request id: 'EPSON-TM-20-7' → 7) e o lpstat NEM roda; a fila só é consultada quando o job está pendente")
+    void ippPrimeiro() {
+        java.util.List<String> chamadas = new java.util.ArrayList<>();
+        AcompanhamentoCups.FonteIpp ipp = new AcompanhamentoCups.FonteIpp() {
+            @Override public java.util.Optional<ClienteIppCups.Job> job(int numero) { chamadas.add("job:" + numero); return java.util.Optional.of(new ClienteIppCups.Job(9, List.of("processing-to-stop-point"), "")); }
+            @Override public java.util.Optional<ClienteIppCups.Fila> fila(String nome) { chamadas.add("fila:" + nome); return java.util.Optional.empty(); }
+        };
+        LpstatFalso lpstat = new LpstatFalso();
+        EstadoSpooler e = new AcompanhamentoCups("EPSON-TM-20", "EPSON-TM-20-7", ipp, lpstat).consultar();
+        assertThat(e.estado()).isEqualTo(Estado.IMPRESSO);
+        assertThat(chamadas).containsExactly("job:7");
+        assertThat(lpstat.chamadas).isEmpty();
     }
 }

@@ -50,6 +50,9 @@ public final class AcompanhamentoWindows implements AcompanhamentoSpooler {
     private final FonteDaFila fonte;
     private final HistoricoJobWindows historico;
     private final AtomicBoolean fechado = new AtomicBoolean();
+    private final AtomicBoolean fonteFechada = new AtomicBoolean();
+    /** A thread que fotografa é a ÚNICA dona do handle da impressora (a doc do OpenPrinter: o handle NÃO é thread-safe). */
+    private volatile Thread dona;
     private volatile int statusImpressora;
 
     AcompanhamentoWindows(String documento, FonteDaFila fonte) {
@@ -69,6 +72,7 @@ public final class AcompanhamentoWindows implements AcompanhamentoSpooler {
             AcompanhamentoWindows a = new AcompanhamentoWindows(documento, new FilaWindowsJna(impressora));
             Thread t = new Thread(a::vigiar, "agente-spooler-" + Integer.toHexString(documento.hashCode()));
             t.setDaemon(true);
+            a.dona = t;
             t.start();
             return Optional.of(a);
         } catch (IOException | RuntimeException | LinkageError e) { // UnsatisfiedLinkError/NoClassDefFoundError: JNA indisponível
@@ -107,7 +111,14 @@ public final class AcompanhamentoWindows implements AcompanhamentoSpooler {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
-            close();
+            fechado.set(true);
+            fecharFonte(); // só AQUI (na thread dona) o ClosePrinter acontece
+        }
+    }
+
+    private void fecharFonte() {
+        if (fonteFechada.compareAndSet(false, true)) {
+            fonte.close();
         }
     }
 
@@ -137,6 +148,7 @@ public final class AcompanhamentoWindows implements AcompanhamentoSpooler {
         } catch (RuntimeException | LinkageError ex) {
             statusImpressora = 0;
         }
+        historico.statusDaImpressora(statusImpressora);
         return true;
     }
 
@@ -154,9 +166,22 @@ public final class AcompanhamentoWindows implements AcompanhamentoSpooler {
     }
 
     @Override
+    public void submetido() {
+        historico.submetido();
+    }
+
+    /**
+     * De QUALQUER thread: só sinaliza e acorda a dona — quem fecha o handle é ela (um ClosePrinter com EnumJobs em voo no mesmo handle,
+     * vindo de outra thread, é uso concorrente que a API não permite). Sem thread dona (testes) fecha direto.
+     */
+    @Override
     public void close() {
-        if (fechado.compareAndSet(false, true)) {
-            fonte.close();
+        fechado.set(true);
+        Thread t = dona;
+        if (t == null || t == Thread.currentThread()) {
+            fecharFonte();
+        } else {
+            t.interrupt();
         }
     }
 }

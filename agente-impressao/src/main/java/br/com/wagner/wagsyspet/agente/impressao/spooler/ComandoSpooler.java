@@ -27,13 +27,26 @@ public final class ComandoSpooler {
     private ComandoSpooler() {
     }
 
+    /**
+     * Força a saída do CUPS para inglês (o parse depende dos rótulos). Só {@code LC_ALL=C} NÃO basta: o {@code cupsLangGet} lê
+     * {@code LC_MESSAGES} ANTES de {@code LC_ALL}, e no macOS ignora os dois salvo se {@code SOFTWARE} estiver definido (aí usa
+     * {@code LANG}) — adversarial L4, reproduzido com {@code LC_ALL=C LC_MESSAGES=pt_BR.UTF-8 lpstat}.
+     */
+    public static void emIngles(java.util.Map<String, String> ambiente) {
+        ambiente.put("LC_ALL", "C");
+        ambiente.put("LC_MESSAGES", "C");
+        ambiente.put("LANG", "C");
+        ambiente.remove("LANGUAGE");
+        ambiente.put("SOFTWARE", "AgroEase");
+    }
+
     public static Function<List<String>, Saida> real(Duration prazo) {
         return cmd -> rodar(cmd, prazo);
     }
 
     static Saida rodar(List<String> cmd, Duration prazo) {
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
-        pb.environment().put("LC_ALL", "C"); // rótulos do lpstat passam por gettext: o parse exige inglês
+        emIngles(pb.environment());
         Process p;
         try {
             p = pb.start();

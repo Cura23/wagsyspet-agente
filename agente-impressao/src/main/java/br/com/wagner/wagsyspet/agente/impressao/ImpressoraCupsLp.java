@@ -106,7 +106,7 @@ public final class ImpressoraCupsLp {
     /** Roda o comando com prazo REAL: stdout lido em thread própria; estourou → mata o processo e devolve ERRO. */
     static Resultado executar(List<String> cmd, Duration prazo, String nomeImpressora, String nomeJob, ModoPapel modo) {
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
-        pb.environment().put("LC_ALL", "C"); // saída em inglês → parse estável de "request id is X-N"
+        br.com.wagner.wagsyspet.agente.impressao.spooler.ComandoSpooler.emIngles(pb.environment()); // parse estável de "request id is X-N"
         Process p;
         try {
             p = pb.start();

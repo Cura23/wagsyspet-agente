@@ -591,6 +591,9 @@ public class ServidorAgente extends WebSocketServer {
             return;
         }
         log.info("Impressão pedida: {}", descricao);
+        // o id é conhecido desde JÁ: um pull antes de o motor responder diz "em envio, não reimprima" (nunca "sem registro")
+        observador.registrar(id, br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.pendente(
+                br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.EM_ENVIO, "pedido recebido; enviando ao spooler"));
         String nomeJob = NOME_JOB + " " + id;
         fila.submeter(descricao, () -> impressao.imprimir(pdf, impressora, nomeJob), new FilaImpressao.Resposta() {
             @Override
@@ -601,10 +604,16 @@ public class ServidorAgente extends WebSocketServer {
                         enviar(conn, Mensagens.imprimirOk(id)); // imediato e inalterado (contrato F2); o estado do spooler vem DEPOIS
                         acompanhar(conn, id, r);
                     }
-                    case IMPRESSORA_INDISPONIVEL -> enviar(conn, Mensagens.imprimirErro(id, Mensagens.IMPRESSORA_INDISPONIVEL,
-                            "Impressora '" + impressora + "' não encontrada neste computador. Confira se está ligada e instalada."));
-                    default -> enviar(conn, Mensagens.imprimirErro(id, Mensagens.ERRO,
-                            "Não foi possível enviar o cupom para '" + impressora + "'. Confira a impressora e tente de novo."));
+                    case IMPRESSORA_INDISPONIVEL -> {
+                        naoAceito(id, r);
+                        enviar(conn, Mensagens.imprimirErro(id, Mensagens.IMPRESSORA_INDISPONIVEL,
+                                "Impressora '" + impressora + "' não encontrada neste computador. Confira se está ligada e instalada."));
+                    }
+                    default -> {
+                        naoAceito(id, r);
+                        enviar(conn, Mensagens.imprimirErro(id, Mensagens.ERRO,
+                                "Não foi possível enviar o cupom para '" + impressora + "'. Confira a impressora e tente de novo."));
+                    }
                 }
             }
 
@@ -619,11 +628,15 @@ public class ServidorAgente extends WebSocketServer {
             public void concluidoTarde(Resultado r) {
                 if (r.aceito()) {
                     acompanhar(conn, id, r); // o PWA já mostrou erro: se o cupom sair, ele fica sabendo — não reimprimir
+                } else {
+                    naoAceito(id, r); // o "em envio" do prazo estourado fecha: o spooler acabou recusando
                 }
             }
 
             @Override
             public void filaCheia() {
+                observador.registrar(id, br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.falhou(
+                        br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.NAO_ACEITO, "agente ocupado: o pedido nem entrou na fila"));
                 log.warn("Fila de impressão cheia; recusando {}", descricao);
                 enviar(conn, Mensagens.imprimirErro(id, Mensagens.ERRO,
                         "O agente está ocupado com outra impressão. Tente de novo em instantes."));
@@ -638,14 +651,23 @@ public class ServidorAgente extends WebSocketServer {
      */
     private void acompanhar(WebSocket conn, String id, Resultado r) {
         if (r.acompanhamento().isEmpty()) {
-            observador.semAcompanhamento(id, "o motor de impressão deste computador não informa o estado do job");
+            // sem suporte neste PC (JNA bloqueada, sem lp…): avisa JÁ — um PWA esperando o push ficaria a janela inteira no escuro
+            var semSuporte = observador.semAcompanhamento(id, "o motor de impressão deste computador não informa o estado do job");
+            if (conn.isOpen()) {
+                enviar(conn, Mensagens.impressaoEstado(id, semSuporte, Mensagens.ORIGEM_PUSH));
+            }
             return;
         }
         observador.observar(id, r.acompanhamento().get(), estado -> {
             if (conn.isOpen()) {
-                enviar(conn, Mensagens.impressaoEstado(id, estado));
+                enviar(conn, Mensagens.impressaoEstado(id, estado, Mensagens.ORIGEM_PUSH));
             }
         });
+    }
+
+    private void naoAceito(String id, Resultado r) {
+        observador.registrar(id, br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.falhou(
+                br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.NAO_ACEITO, "o spooler não aceitou o job: " + r.estado()));
     }
 
     private void consultarImpressao(WebSocket conn, String id) {
@@ -653,7 +675,7 @@ public class ServidorAgente extends WebSocketServer {
             enviar(conn, Mensagens.erro(null, Mensagens.MENSAGEM_INVALIDA, "consultar_impressao exige id"));
             return;
         }
-        enviar(conn, Mensagens.impressaoEstado(id, observador.consultar(id)));
+        enviar(conn, Mensagens.impressaoEstado(id, observador.consultar(id), Mensagens.ORIGEM_CONSULTA));
     }
 
     // ── zelador / utilitários ──────────────────────────────────────────────────────────────────────────────────

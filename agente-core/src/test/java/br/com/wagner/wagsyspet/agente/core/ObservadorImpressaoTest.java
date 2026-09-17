@@ -68,12 +68,11 @@ class ObservadorImpressaoTest {
     @Test
     @DisplayName("fim da janela ainda na fila → o PENDENTE (com o motivo corrente) vira a resposta final ENCERRADA — é o aviso que vale ao operador; durante a janela o pull devolve encerrado:false")
     void janelaEncerraPendente() throws Exception {
-        observador = new ObservadorImpressao(Duration.ofMillis(400), Duration.ofMillis(20));
+        observador = new ObservadorImpressao(Duration.ofMillis(1500), Duration.ofMillis(20));
         Roteiro r = new Roteiro(() -> EstadoSpooler.pendente(Motivo.IMPRESSORA_OFFLINE, "desligada"));
         List<EstadoSpooler> avisos = new CopyOnWriteArrayList<>();
         observador.observar("j-2", r, avisos::add);
-        Thread.sleep(120);
-        EstadoSpooler durante = observador.consultar("j-2");
+        EstadoSpooler durante = observador.consultar("j-2"); // registrado na hora: nunca "sem registro" no meio
         assertThat(durante.estado()).isEqualTo(Estado.PENDENTE);
         assertThat(durante.encerrado()).isFalse();
         EstadoSpooler fim = esperar(avisos);
@@ -146,5 +145,30 @@ class ObservadorImpressaoTest {
         }
         assertThat(observador.consultar("id-0").motivo()).as("o mais antigo saiu").isEqualTo(Motivo.SEM_REGISTRO);
         assertThat(observador.consultar("id-" + ObservadorImpressao.MEMORIA_MAXIMA).motivo()).isEqualTo(Motivo.SEM_SUPORTE);
+    }
+
+    @Test
+    @DisplayName("a vaga do teto é DEVOLVIDA quando a observação termina: 3× o teto em sequência, todas consultadas de verdade (sem isso, depois do 4º cupom do dia todo imprimir ficaria sem acompanhamento até reiniciar o agente)")
+    void vagaDevolvida() throws Exception {
+        observador = new ObservadorImpressao(Duration.ofSeconds(5), Duration.ofMillis(10));
+        for (int i = 0; i < ObservadorImpressao.TETO_OBSERVACOES * 3; i++) {
+            Roteiro r = new Roteiro(() -> EstadoSpooler.impresso("ok"));
+            List<EstadoSpooler> avisos = new CopyOnWriteArrayList<>();
+            observador.observar("seq-" + i, r, avisos::add);
+            assertThat(esperar(avisos).estado()).as("observação %d", i).isEqualTo(Estado.IMPRESSO);
+            assertThat(r.consultas.get()).isPositive();
+        }
+    }
+
+    @Test
+    @DisplayName("registrar(): o id entra na memória ANTES de o motor responder (PENDENTE{EM_ENVIO} não encerrado); recusado → FALHOU{NAO_ACEITO}; um registro novo do mesmo id substitui o anterior")
+    void registrarNaSubmissao() {
+        observador = new ObservadorImpressao(Duration.ofSeconds(5), Duration.ofMillis(10));
+        observador.registrar("s-1", EstadoSpooler.pendente(Motivo.EM_ENVIO, "na fila do agente"));
+        assertThat(observador.consultar("s-1").motivo()).isEqualTo(Motivo.EM_ENVIO);
+        assertThat(observador.consultar("s-1").encerrado()).isFalse();
+        observador.registrar("s-1", EstadoSpooler.falhou(Motivo.NAO_ACEITO, "spooler recusou"));
+        assertThat(observador.consultar("s-1").estado()).isEqualTo(Estado.FALHOU);
+        assertThat(observador.consultar("s-1").encerrado()).isTrue();
     }
 }
