@@ -260,7 +260,7 @@ class AgenteDesktopTest {
             }
         };
         AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{0}, new PrintStream(new ByteArrayOutputStream()), motor);
-        var bema = new br.com.wagner.wagsyspet.agente.core.ExtrasImpressao("ignorado", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESC_BEMA, true, true, 2, 100);
+        var bema = new br.com.wagner.wagsyspet.agente.core.ExtrasImpressao("EPSON", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESC_BEMA, true, true, 2, 100);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.testarGaveta(bema)).hasMessageContaining("Escolha a impressora");
         d.selecionarImpressora("EPSON");
@@ -268,12 +268,12 @@ class AgenteDesktopTest {
 
         d.testarGaveta(bema);
         d.testarCorte(bema);
-        assertThat(raws).containsExactly("EPSON|AgroEase gaveta teste|1B 76 64", "EPSON|AgroEase corte teste|0A 1B 6D");
+        assertThat(raws).containsExactly("EPSON|AgroEase gaveta teste|1B 76 64", "EPSON|AgroEase corte teste|0A 0A 0A 0A 1B 6D");
         assertThat(d.extrasDaImpressora()).as("testar NÃO liga nada").isEmpty();
 
         d.configurarExtras(bema);
         var salvo = d.extrasDaImpressora().orElseThrow();
-        assertThat(salvo.impressora()).as("o opt-in é gravado para a impressora selecionada, não para o que veio no record").isEqualTo("EPSON");
+        assertThat(salvo.impressora()).isEqualTo("EPSON");
         assertThat(salvo.dialeto().name()).isEqualTo("ESC_BEMA");
         assertThat(Files.readString(dirs.config())).contains("\"extras\"").contains("\"gavetaPulsoMs\" : 100");
 
@@ -282,6 +282,11 @@ class AgenteDesktopTest {
 
         d.selecionarImpressora("PDF");
         assertThat(d.extrasDaImpressora()).as("trocar de impressora zera").isEmpty();
+        // a impressora mudou com o diálogo (da EPSON) ainda aberto: nem testar nem ligar na impressora que o lojista NÃO viu/testou
+        falhar.set(false);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.configurarExtras(bema)).hasMessageContaining("mudou");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.testarCorte(bema)).hasMessageContaining("mudou");
+        assertThat(d.extrasDaImpressora()).isEmpty();
     }
     @Test
     @DisplayName("2ª instância disparada pelo Agendador (--keepalive, a cada 1 min no Windows) com o agente já aberto → sai 0 MUDA: sem mensagem, sem diálogo, sem tocar o log; sem a flag (clique humano) continua avisando")

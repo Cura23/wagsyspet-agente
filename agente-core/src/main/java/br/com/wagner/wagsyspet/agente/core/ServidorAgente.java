@@ -553,9 +553,8 @@ public class ServidorAgente extends WebSocketServer {
             if (!impressao.listar().contains(nome)) {
                 return Mensagens.erro(id, Mensagens.IMPRESSORA_INDISPONIVEL, "Impressora '" + nome + "' não encontrada neste computador");
             }
-            config.impressoraSelecionada(nome); // trocar de impressora zera o opt-in anterior
+            config.selecionar(nome, extrasNovos); // UMA gravação: impressora + opt-in (trocar de impressora zera o opt-in anterior)
             if (extrasNovos != null) {
-                config.extras(extrasNovos);
                 log.info("Gaveta/corte deste computador configurados por Origin='{}' para '{}': dialeto={} gaveta={} corte={} pino={} pulso={} ms",
                         sessao.origin, nome, extrasNovos.dialeto(), extrasNovos.gaveta(), extrasNovos.corte(), extrasNovos.gavetaPino(), extrasNovos.gavetaPulsoMs());
             }
@@ -624,30 +623,46 @@ public class ServidorAgente extends WebSocketServer {
         // F6-L5: gaveta só se o PWA pediu (venda em DINHEIRO) E o opt-in local vale para ESTA impressora; corte em todo cupom se ligado.
         // Pedido com o opt-in desligado é ignorado em silêncio — o PDV nunca quebra por causa de um extra.
         boolean gavetaPedida = msg.path("gaveta").isBoolean() && msg.get("gaveta").asBoolean();
-        java.util.Optional<ExtrasImpressao> extras = config.extrasAtivos().filter(e -> e.impressora().equals(impressora));
-        if (gavetaPedida && extras.map(e -> !e.gaveta()).orElse(true)) {
+        if (gavetaPedida && config.extrasAtivos().filter(e -> e.impressora().equals(impressora)).map(e -> !e.gaveta()).orElse(true)) {
             log.info("Impressão {}: gaveta pedida, mas o opt-in deste computador está desligado para '{}' — ignorada", descricao, impressora);
         }
         List<String> avisos = new java.util.concurrent.CopyOnWriteArrayList<>();
-        fila.submeter(descricao, () -> {
-            // mesma thread, em sequência: a ordem de chegada ao spooler é gaveta → PDF → corte (jobs SEPARADOS; o PDF nunca é tocado)
-            if (gavetaPedida && extras.map(ExtrasImpressao::gaveta).orElse(false)) {
-                ExtrasImpressao e = extras.get();
-                Resultado g = impressao.enviarRaw(ComandosRaw.abrirGaveta(e.dialeto(), e.gavetaPino(), e.gavetaPulsoMs()), impressora, NOME_JOB_GAVETA + " " + id);
-                if (!g.aceito()) {
-                    log.warn("Impressão {}: gaveta falhou ({}) — o cupom segue", descricao, g.detalhe());
-                    avisos.add(Mensagens.AVISO_GAVETA_FALHOU);
+        long submetidoNanos = System.nanoTime();
+        fila.submeterEmDoisTempos(descricao, new FilaImpressao.Job() {
+            // mesma thread, em sequência: a ordem de chegada ao spooler é gaveta → PDF → corte (jobs SEPARADOS; o PDF nunca é tocado).
+            // O opt-in é relido AQUI (não na thread da conexão): desligar/trocar de impressora alcança um job que ainda esperava a vez.
+            private java.util.Optional<ExtrasImpressao> extras = java.util.Optional.empty();
+
+            @Override
+            public Resultado principal() {
+                extras = config.extrasAtivos().filter(e -> e.impressora().equals(impressora));
+                boolean tarde = System.nanoTime() - submetidoNanos > prazos.impressao.toNanos();
+                if (gavetaPedida && extras.map(ExtrasImpressao::gaveta).orElse(false)) {
+                    if (tarde) {
+                        // o PWA já recebeu ERRO e o operador já resolveu o troco na chave: gaveta abrindo sozinha minutos depois, não
+                        log.warn("Impressão {}: saiu da fila depois do prazo — a gaveta NÃO é aberta (o cupom atrasado sai)", descricao);
+                    } else {
+                        ExtrasImpressao e = extras.get();
+                        Resultado g = impressao.enviarRaw(ComandosRaw.abrirGaveta(e.dialeto(), e.gavetaPino(), e.gavetaPulsoMs()), impressora, NOME_JOB_GAVETA + " " + id);
+                        if (!g.aceito()) {
+                            log.warn("Impressão {}: gaveta falhou ({}) — o cupom segue", descricao, g.detalhe());
+                            avisos.add(Mensagens.AVISO_GAVETA_FALHOU);
+                        }
+                    }
+                }
+                return impressao.imprimir(pdf, impressora, nomeJob);
+            }
+
+            /** Depois de responder ao PWA: o corte não pode atrasar o imprimir_ok de um cupom já aceito. */
+            @Override
+            public void depois(Resultado r) {
+                if (r.aceito() && extras.map(ExtrasImpressao::corte).orElse(false)) {
+                    Resultado c = impressao.enviarRaw(ComandosRaw.cortar(extras.get().dialeto()), impressora, NOME_JOB_CORTE + " " + id);
+                    if (!c.aceito()) {
+                        log.warn("Impressão {}: corte falhou ({})", descricao, c.detalhe());
+                    }
                 }
             }
-            Resultado r = impressao.imprimir(pdf, impressora, nomeJob);
-            if (r.aceito() && extras.map(ExtrasImpressao::corte).orElse(false)) {
-                Resultado c = impressao.enviarRaw(ComandosRaw.cortar(extras.get().dialeto()), impressora, NOME_JOB_CORTE + " " + id);
-                if (!c.aceito()) {
-                    log.warn("Impressão {}: corte falhou ({})", descricao, c.detalhe());
-                    avisos.add(Mensagens.AVISO_CORTE_FALHOU);
-                }
-            }
-            return r;
         }, new FilaImpressao.Resposta() {
             @Override
             public void concluido(Resultado r) {
@@ -746,11 +761,29 @@ public class ServidorAgente extends WebSocketServer {
             return;
         }
         ExtrasImpressao e = extras.get();
-        byte[] bytes = gaveta ? ComandosRaw.abrirGaveta(e.dialeto(), e.gavetaPino(), e.gavetaPulsoMs()) : ComandosRaw.cortar(e.dialeto());
         String nomeJob = (gaveta ? NOME_JOB_GAVETA : NOME_JOB_CORTE) + " " + id;
         String descricao = "comando=" + qual + " id=" + id + " origin=" + sessao.origin + " jti=" + sessao.jti + " impressora='" + e.impressora() + "'";
+        if (fila.motorPreso()) {
+            log.error("Motor de impressão TRAVADO; recusando {}", descricao);
+            enviar(conn, Mensagens.erro(id, Mensagens.ERRO, "O serviço de impressão deste computador travou. Reinicie o agente (e a impressora) e tente de novo."));
+            return;
+        }
         log.info("Comando pedido: {}", descricao); // rastreabilidade: quem abriu a gaveta, de onde, quando
-        fila.submeter(descricao, () -> impressao.enviarRaw(bytes, e.impressora(), nomeJob), new FilaImpressao.Resposta() {
+        long submetidoNanos = System.nanoTime();
+        fila.submeter(descricao, () -> {
+            if (System.nanoTime() - submetidoNanos > prazos.impressao.toNanos()) {
+                // o PWA já recebeu "não respondeu": gaveta abrindo (ou papel cortando) sozinho minutos depois, não
+                return new Resultado(Resultado.Estado.ERRO, e.impressora(), "comando descartado: saiu da fila depois do prazo");
+            }
+            // opt-in relido na hora de executar: desligar/trocar de impressora alcança um comando que ainda esperava a vez
+            java.util.Optional<ExtrasImpressao> agora = config.extrasAtivos().filter(x -> x.impressora().equals(e.impressora()));
+            if (agora.isEmpty() || (gaveta ? !agora.get().gaveta() : !agora.get().corte())) {
+                return new Resultado(Resultado.Estado.ERRO, e.impressora(), "comando descartado: o opt-in foi desligado enquanto esperava");
+            }
+            ExtrasImpressao x = agora.get();
+            byte[] bytes = gaveta ? ComandosRaw.abrirGaveta(x.dialeto(), x.gavetaPino(), x.gavetaPulsoMs()) : ComandosRaw.cortar(x.dialeto());
+            return impressao.enviarRaw(bytes, x.impressora(), nomeJob);
+        }, new FilaImpressao.Resposta() {
             @Override
             public void concluido(Resultado r) {
                 log.info("Comando {} → {} ({})", descricao, r.estado(), r.detalhe());

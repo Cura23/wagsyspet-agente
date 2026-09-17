@@ -67,6 +67,17 @@ public final class ConfiguracaoLocalArquivo implements ConfiguracaoLocal {
     }
 
     @Override
+    public synchronized void selecionar(String nome, ExtrasImpressao extrasOuNull) throws IOException {
+        if (extrasOuNull != null && !extrasOuNull.impressora().equals(nome)) {
+            throw new IllegalArgumentException("extras de '" + extrasOuNull.impressora() + "' não valem para '" + nome + "'");
+        }
+        recarregarSeMudou();
+        String novo = nome == null || nome.isBlank() ? null : nome;
+        ExtrasImpressao novos = extrasOuNull != null ? extrasOuNull : (Objects.equals(novo, impressora) ? extras : null);
+        gravar(novo, novos); // UMA escrita atômica para os dois
+    }
+
+    @Override
     public Optional<ExtrasImpressao> extras() {
         recarregarSeMudou();
         return Optional.ofNullable(extras);

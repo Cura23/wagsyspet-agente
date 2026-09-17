@@ -21,14 +21,20 @@ public final class ComandosRaw {
 
     public static final int PULSO_MINIMO_MS = 50;
     public static final int PULSO_MAXIMO_MS = 250;
+    /** O manual da MP-4200 TH é ambíguo para {@code ESC v n} ("Range 50 ≤ n ≤ 250" × "50ms ≤ n ≤ 200ms"): fica o teto seguro. */
+    public static final int PULSO_MAXIMO_ESC_BEMA_MS = 200;
     public static final int PULSO_PADRAO_MS = 50;
     public static final int PINO_PADRAO = 2;
 
     private ComandosRaw() {
     }
 
+    public static int pulsoMaximoMs(Dialeto dialeto) {
+        return dialeto == Dialeto.ESC_BEMA ? PULSO_MAXIMO_ESC_BEMA_MS : PULSO_MAXIMO_MS;
+    }
+
     /**
-     * @param pino    conector da gaveta: 2 (o usual) ou 5 — ESC/Bema só tem a gaveta 1 e ignora o pino
+     * @param pino    conector da gaveta: 2 (o usual; "gaveta 1") ou 5 ("gaveta 2")
      * @param pulsoMs largura do pulso do solenoide, {@value #PULSO_MINIMO_MS}–{@value #PULSO_MAXIMO_MS} ms
      */
     public static byte[] abrirGaveta(Dialeto dialeto, int pino, int pulsoMs) {
@@ -36,14 +42,14 @@ public final class ComandosRaw {
         if (pino != 2 && pino != 5) {
             throw new IllegalArgumentException("pino da gaveta deve ser 2 ou 5: " + pino);
         }
-        if (pulsoMs < PULSO_MINIMO_MS || pulsoMs > PULSO_MAXIMO_MS) {
-            throw new IllegalArgumentException("pulso da gaveta fora de " + PULSO_MINIMO_MS + "–" + PULSO_MAXIMO_MS + " ms: " + pulsoMs);
+        if (pulsoMs < PULSO_MINIMO_MS || pulsoMs > pulsoMaximoMs(dialeto)) {
+            throw new IllegalArgumentException("pulso da gaveta fora de " + PULSO_MINIMO_MS + "–" + pulsoMaximoMs(dialeto) + " ms: " + pulsoMs);
         }
         return switch (dialeto) {
             // ESC p m t1 t2 — ON = t1×2 ms; OFF = t2×2 ms (250 → 500 ms, o valor consagrado)
             case ESCPOS -> new byte[]{0x1B, 0x70, (byte) (pino == 2 ? 0 : 1), (byte) (pulsoMs / 2), (byte) 0xFA};
-            // ESC v n — n em ms
-            case ESC_BEMA -> new byte[]{0x1B, 0x76, (byte) pulsoMs};
+            // ESC v n = gaveta 1 (pino 2); ESC 80h n = gaveta 2 (pino 5) — n em ms (MP-4200 TH Programmer's Manual, tabela ESC/Bema)
+            case ESC_BEMA -> new byte[]{0x1B, (byte) (pino == 2 ? 0x76 : 0x80), (byte) pulsoMs};
         };
     }
 
@@ -52,7 +58,9 @@ public final class ComandosRaw {
         Objects.requireNonNull(dialeto, "dialeto");
         return switch (dialeto) {
             case ESCPOS -> new byte[]{0x0A, 0x1D, 0x56, 0x42, 0x00}; // GS V 66 0: alimenta até a guilhotina (≈14 mm) e corta
-            case ESC_BEMA -> new byte[]{0x0A, 0x1B, 0x6D};           // ESC m
+            // ESC m corta SEM alimentar (o GS V 66 do ESC/POS alimenta sozinho): 4 linhas (≈17 mm ≥ cabeça→guilhotina ≈14 mm) antes,
+            // senão a lâmina passa DENTRO do rabo do cupom. Só LF — nenhum comando de avanço que eu não possa conferir em hardware.
+            case ESC_BEMA -> new byte[]{0x0A, 0x0A, 0x0A, 0x0A, 0x1B, 0x6D};
         };
     }
 }

@@ -431,6 +431,14 @@ class ContratoF3Test {
         private static final byte[] GAVETA = {0x1B, 0x70, 0x00, 0x19, (byte) 0xFA};
         private static final byte[] CORTE = {0x0A, 0x1D, 0x56, 0x42, 0x00};
 
+        /** O corte roda DEPOIS do imprimir_ok (na mesma thread da fila): quem confere a ordem espera ele chegar ao motor. */
+        private void esperarOrdem(int tamanho) throws InterruptedException {
+            long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (impressao.ordem.size() < tamanho && System.nanoTime() < limite) {
+                Thread.sleep(20);
+            }
+        }
+
         private void ligar(boolean gaveta, boolean corte) throws Exception {
             config.extras(new ExtrasImpressao("EPSON TM-T20", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESCPOS, gaveta, corte, 2, 50));
         }
@@ -499,12 +507,14 @@ class ContratoF3Test {
             JsonNode ok = c.proximaMensagem();
             assertThat(ok.get("tipo").asText()).isEqualTo("imprimir_ok");
             assertThat(ok.has("avisos")).isFalse();
+            esperarOrdem(3);
             assertThat(impressao.ordem).containsExactly("raw:AgroEase gaveta v-1", "pdf:AgroEase cupom v-1", "raw:AgroEase corte v-1");
             assertThat(impressao.jobs.get(0).pdf()).as("o PDF nunca é tocado").isEqualTo(PDF);
 
             impressao.ordem.clear();
             c.send(json("tipo", "imprimir", "id", "v-2", "formato", "pdf", "bytesBase64", base64(PDF)));
             assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_ok");
+            esperarOrdem(2);
             assertThat(impressao.ordem).containsExactly("pdf:AgroEase cupom v-2", "raw:AgroEase corte v-2");
             c.close();
         }
@@ -527,7 +537,7 @@ class ContratoF3Test {
         }
 
         @Test
-        @DisplayName("gaveta/corte FALHANDO não derrubam o cupom: imprimir_ok + avisos:['GAVETA_FALHOU','CORTE_FALHOU']; PDF FALHANDO: a gaveta já abriu (o troco não depende do papel) e o corte NÃO é enviado")
+        @DisplayName("gaveta FALHANDO não derruba o cupom: imprimir_ok + avisos:['GAVETA_FALHOU'] (o corte vem DEPOIS da resposta: falha dele é só log); PDF FALHANDO: a gaveta já abriu (o troco não depende do papel) e o corte NÃO é enviado")
         void falhasDoRaw() throws Exception {
             ligar(true, true);
             impressao.rawComErro = true;
@@ -536,7 +546,7 @@ class ContratoF3Test {
             c.send(pedido.toString());
             JsonNode ok = c.proximaMensagem();
             assertThat(ok.get("tipo").asText()).isEqualTo("imprimir_ok");
-            assertThat(JSON.convertValue(ok.get("avisos"), java.util.List.class)).containsExactly("GAVETA_FALHOU", "CORTE_FALHOU");
+            assertThat(JSON.convertValue(ok.get("avisos"), java.util.List.class)).containsExactly("GAVETA_FALHOU");
 
             impressao.rawComErro = false;
             impressao.impressoraComErro = "EPSON TM-T20";
@@ -545,6 +555,75 @@ class ContratoF3Test {
             c.send(pedido.toString());
             assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_erro");
             assertThat(impressao.ordem).containsExactly("raw:AgroEase gaveta v-6", "pdf:AgroEase cupom v-6");
+            c.close();
+        }
+
+        @Test
+        @DisplayName("imprimir_ok sai assim que o PDF é ACEITO — NÃO espera o corte (adversarial L5: gaveta + PDF + corte na mesma tarefa estouravam os 12 s e o PWA via ERRO com o cupom já na mão → reimpressão duplicada); o corte ainda roda na mesma thread, antes do próximo job")
+        void imprimirOkNaoEsperaOCorte() throws Exception {
+            ligar(false, true);
+            impressao.atrasoDoCorteMs = 2500; // > prazo de impressão do teste (1,5 s)
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            long t0 = System.nanoTime();
+            c.send(json("tipo", "imprimir", "id", "v-8", "formato", "pdf", "bytesBase64", base64(PDF)));
+            JsonNode r = c.proximaMensagem();
+            assertThat(r.get("tipo").asText()).as("o corte lento não pode virar erro de prazo do cupom").isEqualTo("imprimir_ok");
+            assertThat(Duration.ofNanos(System.nanoTime() - t0)).isLessThan(Duration.ofMillis(1400));
+            long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(6);
+            while (impressao.raws.isEmpty() && System.nanoTime() < limite) { Thread.sleep(50); }
+            assertThat(impressao.ordem).containsExactly("pdf:AgroEase cupom v-8", "raw:AgroEase corte v-8");
+            c.close();
+        }
+
+        @Test
+        @DisplayName("GAVETA TARDIA não abre (adversarial L5): job que ficou preso atrás de outro além do prazo — o PWA já recebeu ERRO e o operador já resolveu o troco na chave — imprime o cupom atrasado, mas NÃO dispara a gaveta sozinha minutos depois; comando{ABRIR_GAVETA} tardio idem: nada vai ao spooler")
+        void gavetaTardiaNaoAbre() throws Exception {
+            ligar(true, false);
+            java.util.concurrent.CountDownLatch trinco = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch entrou = new java.util.concurrent.CountDownLatch(1);
+            impressao.trinco.set(trinco);
+            impressao.entrou.set(entrou);
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            c.send(json("tipo", "imprimir", "id", "t-1", "formato", "pdf", "bytesBase64", base64(PDF))); // prende o motor
+            assertThat(entrou.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            ObjectNode venda = JSON.createObjectNode().put("tipo", "imprimir").put("id", "t-2").put("formato", "pdf").put("bytesBase64", base64(PDF)).put("gaveta", true);
+            c.send(venda.toString());
+            c.send(json("tipo", "comando", "id", "t-3", "comando", "ABRIR_GAVETA"));
+            for (int i = 0; i < 3; i++) { // os três estouram o prazo de 1,5 s
+                assertThat(c.proximaMensagem(6).get("tipo").asText()).isIn("imprimir_erro", "erro");
+            }
+            impressao.trinco.set(null);
+            trinco.countDown();
+            long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+            while (impressao.jobs.size() < 2 && System.nanoTime() < limite) { Thread.sleep(50); }
+            Thread.sleep(300);
+            assertThat(impressao.jobs).as("o cupom atrasado ainda sai").hasSize(2);
+            assertThat(impressao.raws).as("nenhuma gaveta abre sozinha depois do erro").isEmpty();
+            c.close();
+        }
+
+        @Test
+        @DisplayName("opt-in POR FLAG e POR IMPRESSORA também no imprimir (mutantes do adversarial L5): só o corte ligado + gaveta pedida → NÃO abre gaveta; extras gravados para uma impressora que NÃO é a selecionada + job explícito para ela → nada de raw, e comando → COMANDO_DESABILITADO")
+        void optInPorFlagEPorImpressora() throws Exception {
+            ligar(false, true);
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            ObjectNode pedido = JSON.createObjectNode().put("tipo", "imprimir").put("id", "m-1").put("formato", "pdf").put("bytesBase64", base64(PDF)).put("gaveta", true);
+            c.send(pedido.toString());
+            assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_ok");
+            long limite = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+            while (impressao.raws.isEmpty() && System.nanoTime() < limite) { Thread.sleep(30); }
+            assertThat(impressao.ordem).containsExactly("pdf:AgroEase cupom m-1", "raw:AgroEase corte m-1");
+
+            config.impressoraSelecionada("PDF");
+            config.extras(new ExtrasImpressao("EPSON TM-T20", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESCPOS, true, true, 2, 50));
+            impressao.raws.clear();
+            ObjectNode paraAEpson = JSON.createObjectNode().put("tipo", "imprimir").put("id", "m-2").put("formato", "pdf").put("bytesBase64", base64(PDF)).put("impressora", "EPSON TM-T20").put("gaveta", true);
+            c.send(paraAEpson.toString());
+            assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_ok");
+            c.send(json("tipo", "comando", "id", "m-3", "comando", "ABRIR_GAVETA"));
+            assertThat(c.proximaMensagem().get("codigo").asText()).isEqualTo("COMANDO_DESABILITADO");
+            Thread.sleep(200);
+            assertThat(impressao.raws).isEmpty();
             c.close();
         }
 

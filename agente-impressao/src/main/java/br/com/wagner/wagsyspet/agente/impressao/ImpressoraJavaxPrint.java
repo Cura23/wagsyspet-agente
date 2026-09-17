@@ -140,6 +140,15 @@ public final class ImpressoraJavaxPrint {
      * {@code pDatatype="RAW"} e escrever com {@code WritePrinter}: o driver NÃO renderiza nada. Job separado, na mesma fila do cupom.
      */
     public static Resultado enviarRaw(byte[] bytes, String nomeImpressora, String nomeJob) {
+        return enviarRaw(bytes, nomeImpressora, nomeJob, br.com.wagner.wagsyspet.agente.impressao.raw.DriverWindows::v4);
+    }
+
+    /** @param driverV4 driver v4/XPSDrv descarta RAW em silêncio: erro HONESTO em vez de "sucesso" (ver {@code DriverWindows}) */
+    public static Resultado enviarRaw(byte[] bytes, String nomeImpressora, String nomeJob, java.util.function.Predicate<String> driverV4) {
+        if (driverV4.test(nomeImpressora)) {
+            return new Resultado(Resultado.Estado.ERRO, nomeImpressora, "O driver desta impressora é do tipo v4 (XPS) e não aceita comando direto: "
+                    + "ligue a gaveta/o corte nas preferências do PRÓPRIO driver, ou instale o driver do fabricante (v3)");
+        }
         Optional<PrintService> servico = localizar(nomeImpressora);
         if (servico.isEmpty()) {
             return new Resultado(Resultado.Estado.IMPRESSORA_INDISPONIVEL, nomeImpressora,

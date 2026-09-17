@@ -33,11 +33,12 @@ class ComandosRawTest {
     }
 
     @Test
-    @DisplayName("ESC/Bema (Bematech de fábrica — lá ESC p e GS V NÃO existem): gaveta = ESC v <ms>; corte = LF + ESC m (parcial). Misturar dialetos imprime caracteres espúrios: por isso é enum, nunca 'os dois para garantir'")
+    @DisplayName("ESC/Bema (Bematech de fábrica — lá ESC p e GS V NÃO existem): gaveta 1 (pino 2) = ESC v <ms>; gaveta 2 (pino 5) = ESC 80h <ms>; corte = 4×LF + ESC m — o ESC m NÃO alimenta o papel (diferente do GS V 66 do ESC/POS): sem os LFs a guilhotina cortaria DENTRO do rabo do cupom (cabeça→lâmina ≈ 14 mm; 4 linhas ≈ 17 mm) — adversarial L5")
     void escBema() {
         assertThat(hex(ComandosRaw.abrirGaveta(Dialeto.ESC_BEMA, 2, 100))).isEqualTo("1B 76 64");
         assertThat(hex(ComandosRaw.abrirGaveta(Dialeto.ESC_BEMA, 2, 50))).isEqualTo("1B 76 32");
-        assertThat(hex(ComandosRaw.cortar(Dialeto.ESC_BEMA))).isEqualTo("0A 1B 6D");
+        assertThat(hex(ComandosRaw.abrirGaveta(Dialeto.ESC_BEMA, 5, 100))).isEqualTo("1B 80 64");
+        assertThat(hex(ComandosRaw.cortar(Dialeto.ESC_BEMA))).isEqualTo("0A 0A 0A 0A 1B 6D");
     }
 
     @Test
@@ -47,6 +48,11 @@ class ComandosRawTest {
         assertThatThrownBy(() -> ComandosRaw.abrirGaveta(Dialeto.ESCPOS, 2, 251)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ComandosRaw.abrirGaveta(Dialeto.ESCPOS, 3, 50)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ComandosRaw.abrirGaveta(null, 2, 50)).isInstanceOf(NullPointerException.class);
+        // o manual da MP-4200 TH é ambíguo para ESC v ("Range 50–250" × "50ms ≤ n ≤ 200ms"): fica o teto SEGURO de 200 no ESC/Bema
+        assertThat(ComandosRaw.pulsoMaximoMs(Dialeto.ESC_BEMA)).isEqualTo(200);
+        assertThat(ComandosRaw.pulsoMaximoMs(Dialeto.ESCPOS)).isEqualTo(250);
+        assertThatThrownBy(() -> ComandosRaw.abrirGaveta(Dialeto.ESC_BEMA, 2, 201)).isInstanceOf(IllegalArgumentException.class);
+        ComandosRaw.abrirGaveta(Dialeto.ESC_BEMA, 2, 200);
     }
 
     @Test
@@ -56,14 +62,14 @@ class ComandosRawTest {
         for (Dialeto d : Dialeto.values()) {
             todos.add(ComandosRaw.cortar(d));
             for (int pino : new int[]{2, 5}) {
-                for (int ms = 50; ms <= 250; ms++) {
+                for (int ms = 50; ms <= ComandosRaw.pulsoMaximoMs(d); ms++) {
                     todos.add(ComandosRaw.abrirGaveta(d, pino, ms));
                 }
             }
         }
         byte[][] proibidos = {{0x1B, 0x40}, {0x1D, 0x28}, {0x1C, 0x28}, {0x1D, (byte) 0xF9}, {0x10, 0x14}};
         for (byte[] comando : todos) {
-            assertThat(comando.length).as("comandos curtos: só gaveta e corte").isLessThanOrEqualTo(5);
+            assertThat(comando.length).as("comandos curtos: só gaveta e corte").isLessThanOrEqualTo(6);
             for (byte[] p : proibidos) {
                 for (int i = 0; i + 1 < comando.length; i++) {
                     assertThat(comando[i] == p[0] && comando[i + 1] == p[1]).as("%s contém %s", hex(comando), hex(p)).isFalse();

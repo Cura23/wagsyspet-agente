@@ -108,7 +108,8 @@ public final class ImpressoraCupsLp {
         return List.of(LP.toString(), "-d", nomeImpressora, "-t", nomeJob, "-o", "raw");
     }
 
-    static final int PRAZO_LP_RAW_SEGUNDOS = 3;
+    /** Curto: a gaveta vem ANTES do PDF e divide com ele o prazo da fila do agente (12 s). */
+    static final int PRAZO_LP_RAW_SEGUNDOS = 2;
 
     /** F6-L5: bytes crus (gaveta/corte) como job separado na MESMA fila do cupom. Sem acompanhamento: o que importa é o PDF. */
     public static Resultado enviarRaw(byte[] bytes, String nomeImpressora, String nomeJob) {

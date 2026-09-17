@@ -100,6 +100,11 @@ class ImpressaoVirtualEnvTest {
         if (impressora.sistema() != Impressora.Sistema.WINDOWS) {
             assertThat(r.aceito()).as("lp -o raw deve ser aceito pelo CUPS: %s", r.detalhe()).isTrue();
             assertThat(r.acompanhamento()).as("comando cru não é observado: o que importa é o PDF").isEmpty();
+        } else if (virtual.toLowerCase().contains("print to pdf")) {
+            // "Microsoft Print to PDF" é driver v4 (XPS): RAW seria descartado em silêncio → o agente tem de dizer ERRO, não "sucesso".
+            // Prova em Windows REAL a detecção pelo registro (…\\Drivers\\Version-4\\<driver>) — adversarial L5
+            assertThat(r.aceito()).as("driver v4 não aceita comando direto: %s", r.detalhe()).isFalse();
+            assertThat(r.detalhe()).containsIgnoringCase("v4");
         }
         var inexistente = impressora.enviarRaw(gaveta, "IMPRESSORA_QUE_NAO_EXISTE_" + UUID.randomUUID(), "AgroEase gaveta x");
         assertThat(inexistente.aceito()).isFalse();

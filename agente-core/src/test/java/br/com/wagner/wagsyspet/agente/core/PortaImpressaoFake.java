@@ -42,8 +42,18 @@ final class PortaImpressaoFake implements PortaImpressao {
     /** Quando true, todo enviarRaw devolve ERRO (gaveta/corte falhando não pode derrubar o cupom). */
     volatile boolean rawComErro;
 
+    /** Atraso (ms) de todo enviarRaw cujo job contém "corte" — spooler lento depois do PDF. */
+    volatile long atrasoDoCorteMs;
+
     @Override
     public Resultado enviarRaw(byte[] bytes, String impressora, String nomeJob) {
+        if (atrasoDoCorteMs > 0 && nomeJob.contains("corte")) {
+            try {
+                Thread.sleep(atrasoDoCorteMs);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+        }
         raws.add(new Raw(bytes, impressora, nomeJob));
         ordem.add("raw:" + nomeJob);
         return rawComErro ? new Resultado(Estado.ERRO, impressora, "raw recusado (fake)") : new Resultado(Estado.ACEITO_SPOOLER, impressora, "raw aceito (fake)");

@@ -142,18 +142,22 @@ public final class AcoesUi {
     }
 
     private void mostrarDialogoGavetaECorte(String impressora, Optional<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> atuais) {
-        var Dialeto = br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.class;
+        // combo ↔ enum por TABELA explícita (índice = posição aqui), não por ordinal(): reordenar o enum não pode trocar o dialeto gravado
+        final br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto[] dialetos = {
+                br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESCPOS, br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESC_BEMA};
         javax.swing.JCheckBox gaveta = new javax.swing.JCheckBox("Abrir a gaveta nas vendas em dinheiro", atuais.map(e -> e.gaveta()).orElse(false));
         javax.swing.JCheckBox corte = new javax.swing.JCheckBox("Cortar o papel depois de cada cupom (só se a impressora não corta sozinha)", atuais.map(e -> e.corte()).orElse(false));
         javax.swing.JComboBox<String> dialeto = new javax.swing.JComboBox<>(new String[]{"Epson, Elgin e compatíveis (ESC/POS)", "Bematech no modo de fábrica (ESC/Bema)"});
-        dialeto.setSelectedIndex(atuais.map(e -> e.dialeto().ordinal()).orElse(0));
+        dialeto.setSelectedIndex(atuais.map(e -> java.util.Arrays.asList(dialetos).indexOf(e.dialeto())).filter(i -> i >= 0).orElse(0));
         javax.swing.JComboBox<Integer> pino = new javax.swing.JComboBox<>(new Integer[]{2, 5});
         pino.setSelectedItem(atuais.map(e -> e.gavetaPino()).orElse(br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PINO_PADRAO));
         javax.swing.JSpinner pulso = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(
                 (int) atuais.map(e -> e.gavetaPulsoMs()).orElse(br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PULSO_PADRAO_MS),
                 br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PULSO_MINIMO_MS, br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PULSO_MAXIMO_MS, 10));
         java.util.function.Supplier<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> valores = () -> new br.com.wagner.wagsyspet.agente.core.ExtrasImpressao(
-                impressora, Dialeto.getEnumConstants()[dialeto.getSelectedIndex()], gaveta.isSelected(), corte.isSelected(), (Integer) pino.getSelectedItem(), (Integer) pulso.getValue());
+                impressora, dialetos[dialeto.getSelectedIndex()], gaveta.isSelected(), corte.isSelected(), (Integer) pino.getSelectedItem(),
+                // o teto do pulso depende do dialeto (ESC/Bema: 200 ms): aperta o valor em vez de deixar a validação estourar no clique
+                Math.min((Integer) pulso.getValue(), br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.pulsoMaximoMs(dialetos[dialeto.getSelectedIndex()])));
 
         javax.swing.JButton testarGaveta = new javax.swing.JButton("Testar gaveta");
         testarGaveta.addActionListener(e -> { var v = valores.get(); emSegundoPlano("testar gaveta", () -> avisar(agente.testarGaveta(v) + "\nA gaveta abriu? Se não abriu, aumente o pulso ou troque o tipo de impressora.")); });
@@ -164,7 +168,7 @@ public final class AcoesUi {
         painel.setLayout(new javax.swing.BoxLayout(painel, javax.swing.BoxLayout.Y_AXIS));
         String aviso = pareceVirtual(impressora)
                 ? "<br><b>Esta impressora parece virtual (PDF/XPS/Fax): gaveta e corte não fazem sentido aqui.</b>" : "";
-        painel.add(new javax.swing.JLabel("<html>Impressora deste computador: <b>" + impressora.replace("<", "&lt;") + "</b>" + aviso
+        painel.add(new javax.swing.JLabel("<html>Impressora deste computador: <b>" + impressora.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</b>" + aviso
                 + "<br>Só para impressora térmica de cupom. Use <b>Testar</b> e ligue só se funcionar:<br>"
                 + "em outro tipo de impressora sai uma folha em branco a cada comando.</html>"));
         for (java.awt.Component c : new java.awt.Component[]{gaveta, corte, new javax.swing.JLabel("Tipo de impressora:"), dialeto,

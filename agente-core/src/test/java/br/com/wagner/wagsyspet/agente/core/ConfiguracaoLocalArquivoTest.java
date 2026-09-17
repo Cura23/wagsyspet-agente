@@ -103,4 +103,21 @@ class ConfiguracaoLocalArquivoTest {
             assertThat(c.extrasAtivos()).as(extras).isEmpty();
         }
     }
+
+    @Test
+    @DisplayName("selecionar(nome, extras) grava impressora E opt-in numa ÚNICA escrita (o painel do PWA não pode receber ERRO com a impressora já trocada pela metade — adversarial L5): extras nulos mantêm o opt-in se a impressora é a mesma e zeram se mudou")
+    void selecionarEmUmaEscrita(@TempDir Path dir) throws Exception {
+        Path arquivo = dir.resolve("config.json");
+        ConfiguracaoLocalArquivo c = new ConfiguracaoLocalArquivo(arquivo);
+        var epson = new ExtrasImpressao("EPSON", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESCPOS, true, true, 2, 50);
+        c.selecionar("EPSON", epson);
+        String depoisDeUma = Files.readString(arquivo);
+        assertThat(depoisDeUma).contains("\"impressoraSelecionada\" : \"EPSON\"").contains("\"gaveta\" : true");
+        c.selecionar("EPSON", null);
+        assertThat(c.extrasAtivos()).as("mesma impressora sem extras no pedido: mantém").isPresent();
+        c.selecionar("HP", null);
+        assertThat(c.extrasAtivos()).isEmpty();
+        assertThat(c.impressoraSelecionada()).contains("HP");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> c.selecionar("HP", epson)).as("extras de OUTRA impressora não entram").isInstanceOf(IllegalArgumentException.class);
+    }
 }
