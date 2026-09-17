@@ -58,7 +58,9 @@ public final class ReversorMsiDeFora implements Reversor {
         Path exe = anterior.get();
         Path arquivoPlano = dirs.atualizacao().resolve(GerenteAtualizacao.ARQUIVO_PLANO);
         try {
-            new PlanoAtualizacao(ap.versaoAnterior(), ap.versaoNova(), exe.toString(), "", exe.getFileName().toString(),
+            // com o sha do guardado: o atualizador de fora reconfere o arquivo antes de executar
+            String sha = GuardaAnterior.shaGuardado(dirs.atualizacao().resolve("anterior"), ap.versaoAnterior()).orElse("");
+            new PlanoAtualizacao(ap.versaoAnterior(), ap.versaoNova(), exe.toString(), sha, exe.getFileName().toString(),
                     ManifestoRelease.FormatoInstalado.INSTALADOR, launcher.get().map(Path::toString), dirs.raiz().toString(), Instant.now(),
                     PlanoAtualizacao.Gatilho.AUTO).gravar(arquivoPlano);
         } catch (IOException e) {

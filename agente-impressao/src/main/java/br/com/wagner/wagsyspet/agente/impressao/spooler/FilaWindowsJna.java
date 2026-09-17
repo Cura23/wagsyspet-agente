@@ -71,7 +71,9 @@ final class FilaWindowsJna implements AcompanhamentoWindows.FonteDaFila {
     @Override
     public int statusImpressora() {
         try {
-            return WinspoolUtil.getPrinterInfo2(impressora).Status;
+            // Status E Attributes: a USB desligada aparece como "Usar impressora offline" nos ATRIBUTOS, com Status = 0
+            Winspool.PRINTER_INFO_2 info = WinspoolUtil.getPrinterInfo2(impressora);
+            return HistoricoJobWindows.statusEfetivo(info.Status, info.Attributes);
         } catch (RuntimeException e) {
             return 0;
         }

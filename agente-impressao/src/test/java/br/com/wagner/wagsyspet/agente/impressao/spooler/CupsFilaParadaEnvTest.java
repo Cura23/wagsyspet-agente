@@ -55,4 +55,13 @@ class CupsFilaParadaEnvTest {
         assertThat(cancelado.estado()).isEqualTo(Estado.FALHOU);
         assertThat(cancelado.motivo()).isEqualTo(Motivo.CANCELADO);
     }
+
+    @Test
+    @DisplayName("Fecho F6 — pré-voo da GAVETA no CUPS real: fila PARADA → impedimento (o pulso ficaria guardado e a gaveta abriria sozinha quando a fila voltasse); fila que não existe / sem evidência → livre")
+    void preVooDaGaveta() {
+        java.util.Optional<String> parada = PreVooGaveta.impedimento(false, fila);
+        System.out.println("[PRE-VOO] " + fila + " → " + parada);
+        assertThat(parada).as("fila desabilitada tem de barrar o pulso da gaveta").isPresent();
+        assertThat(PreVooGaveta.impedimento(false, "AGROEASE_FILA_QUE_NAO_EXISTE")).as("sem evidência não bloqueia").isEmpty();
+    }
 }

@@ -8,6 +8,7 @@ import br.com.wagner.wagsyspet.agente.core.InfoAgente;
 import br.com.wagner.wagsyspet.agente.core.PortaImpressao;
 import br.com.wagner.wagsyspet.agente.core.SubidaComFallback;
 import br.com.wagner.wagsyspet.agente.core.VersaoDoBinario;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.GerenteAtualizacao;
 import br.com.wagner.wagsyspet.agente.core.pareamento.DiretoriosDoAgente;
 import br.com.wagner.wagsyspet.agente.impressao.Impressora;
 import br.com.wagner.wagsyspet.agente.impressao.ImpressoraJavaxPrint;
@@ -141,6 +142,13 @@ public final class Main {
         }
     }
 
+    /** O que dizer a quem abriu o agente com a trava tomada: outro agente aberto, ou o atualizador no meio da instalação. */
+    static String mensagemDeSegundaInstancia(boolean atualizando) {
+        return atualizando
+                ? NOME_PRODUTO + " está se atualizando neste computador. Ele volta sozinho em até 1 minuto — não precisa abrir de novo."
+                : NOME_PRODUTO + " já está em execução neste computador (procure o ícone na bandeja ou a janela do agente).";
+    }
+
     /** Sem comando: programa de desktop. Uma instância por usuário; bandeja → janela → só CLI (headless). */
     private static int servir(Argumentos a, DiretoriosDoAgente dirs, PrintStream out, boolean verboso) throws Exception {
         dirs.garantir();
@@ -161,7 +169,8 @@ public final class Main {
             trava = TravaDeInstancia.tentar(dirs.lock());
         }
         if (trava.isEmpty()) {
-            String msg = NOME_PRODUTO + " já está em execução neste computador (procure o ícone na bandeja ou a janela do agente).";
+            // Fecho F6: durante uma atualização quem segura a trava é o ATUALIZADOR (não há ícone na bandeja para "procurar")
+            String msg = mensagemDeSegundaInstancia(Files.exists(dirs.atualizacao().resolve(GerenteAtualizacao.ARQUIVO_PLANO)));
             log.warn("Segunda instância; saindo com 0");
             out.println(msg);
             if (!GraphicsEnvironment.isHeadless() && !a.flag(Argumentos.FLAG_SEM_BANDEJA)) {

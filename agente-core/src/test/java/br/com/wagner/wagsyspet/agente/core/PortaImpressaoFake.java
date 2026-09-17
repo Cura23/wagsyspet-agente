@@ -38,6 +38,13 @@ final class PortaImpressaoFake implements PortaImpressao {
     }
 
     final List<Raw> raws = new CopyOnWriteArrayList<>();
+    /** Fecho F6: quando não-nulo, o pré-voo da gaveta diz que a impressora NÃO está pronta (offline, fila parada, pulso já preso). */
+    volatile String impedimentoDaGaveta;
+
+    @Override
+    public java.util.Optional<String> impedimentoDaGaveta(String impressora) {
+        return java.util.Optional.ofNullable(impedimentoDaGaveta);
+    }
     final List<String> ordem = new CopyOnWriteArrayList<>();
     /** Quando true, todo enviarRaw devolve ERRO (gaveta/corte falhando não pode derrubar o cupom). */
     volatile boolean rawComErro;

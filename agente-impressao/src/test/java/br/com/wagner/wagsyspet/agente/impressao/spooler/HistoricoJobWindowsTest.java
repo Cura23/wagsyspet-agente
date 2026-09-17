@@ -73,6 +73,20 @@ class HistoricoJobWindowsTest {
         assertThat(pendente(JOB_STATUS_PRINTING, 0)).as("imprimindo, sem queixa").isNull();
     }
 
+    @Test
+    @DisplayName("Fecho F6 — o retrato REAL de 'térmica USB desligada' no Windows: a fila fica 'Usar impressora offline' = bit em PRINTER_INFO_2.ATTRIBUTES (WORK_OFFLINE 0x400), com Status=0 e o job parado com Status=0. Sem ler Attributes o motivo saía vazio, o pull cedo do PWA não avisava e o operador reimprimia. Attributes offline → IMPRESSORA_OFFLINE; e impressora offline VENCE o ERROR do job (porta que tenta escrever numa impressora desligada não é 'erro do driver')")
+    void impressoraOfflinePelosAtributos() {
+        assertThat(HistoricoJobWindows.statusEfetivo(0, HistoricoJobWindows.PRINTER_ATTRIBUTE_WORK_OFFLINE)).isEqualTo(PRINTER_STATUS_OFFLINE);
+        assertThat(HistoricoJobWindows.statusEfetivo(PRINTER_STATUS_PAPER_OUT, 0x400 | 0x40)).isEqualTo(PRINTER_STATUS_PAPER_OUT | PRINTER_STATUS_OFFLINE);
+        assertThat(HistoricoJobWindows.statusEfetivo(0, 0x40 /* LOCAL */)).as("atributos sem o bit offline não inventam queixa").isZero();
+
+        int offline = HistoricoJobWindows.statusEfetivo(0, HistoricoJobWindows.PRINTER_ATTRIBUTE_WORK_OFFLINE);
+        assertThat(pendente(0, offline)).isEqualTo(Motivo.IMPRESSORA_OFFLINE);
+        assertThat(pendente(JOB_STATUS_ERROR | JOB_STATUS_PRINTING, offline)).as("impressora offline vence o ERROR do job").isEqualTo(Motivo.IMPRESSORA_OFFLINE);
+        assertThat(pendente(JOB_STATUS_ERROR | JOB_STATUS_PRINTING, PRINTER_STATUS_PAPER_OUT)).isEqualTo(Motivo.SEM_PAPEL);
+        assertThat(pendente(JOB_STATUS_PAPEROUT, offline)).as("queixa ESPECÍFICA do job continua na frente").isEqualTo(Motivo.SEM_PAPEL);
+    }
+
     private static Motivo pendente(int statusJob, int statusImpressora) {
         HistoricoJobWindows h = new HistoricoJobWindows("x");
         h.visto(50, statusJob);

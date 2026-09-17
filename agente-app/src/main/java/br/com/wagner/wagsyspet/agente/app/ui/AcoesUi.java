@@ -145,7 +145,7 @@ public final class AcoesUi {
         // combo ↔ enum por TABELA explícita (índice = posição aqui), não por ordinal(): reordenar o enum não pode trocar o dialeto gravado
         final br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto[] dialetos = {
                 br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESCPOS, br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESC_BEMA};
-        javax.swing.JCheckBox gaveta = new javax.swing.JCheckBox("Abrir a gaveta nas vendas em dinheiro", atuais.map(e -> e.gaveta()).orElse(false));
+        javax.swing.JCheckBox gaveta = new javax.swing.JCheckBox("Abrir a gaveta ao imprimir o cupom de uma venda em dinheiro", atuais.map(e -> e.gaveta()).orElse(false));
         javax.swing.JCheckBox corte = new javax.swing.JCheckBox("Cortar o papel depois de cada cupom (só se a impressora não corta sozinha)", atuais.map(e -> e.corte()).orElse(false));
         javax.swing.JComboBox<String> dialeto = new javax.swing.JComboBox<>(new String[]{"Epson, Elgin e compatíveis (ESC/POS)", "Bematech no modo de fábrica (ESC/Bema)"});
         dialeto.setSelectedIndex(atuais.map(e -> java.util.Arrays.asList(dialetos).indexOf(e.dialeto())).filter(i -> i >= 0).orElse(0));

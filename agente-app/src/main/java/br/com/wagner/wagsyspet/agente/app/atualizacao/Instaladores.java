@@ -21,6 +21,16 @@ public final class Instaladores {
     private Instaladores() {
     }
 
+    /**
+     * O instalador deste SO/formato roda SEM ninguém na frente? Só o Linux instalado pelo pacote do sistema (.deb em /opt) não:
+     * {@code pkexec dpkg -i} pede a senha de administrador. Windows (MSI por usuário), macOS (troca do .app) e o app-image do
+     * Linux (troca de diretório do próprio usuário) aplicam sozinhos.
+     */
+    public static boolean aplicaSozinho(String osName, br.com.wagner.wagsyspet.agente.protocolo.release.ManifestoRelease.FormatoInstalado formato) {
+        boolean linux = osName != null && osName.toLowerCase(java.util.Locale.ROOT).contains("linux");
+        return !(linux && formato == br.com.wagner.wagsyspet.agente.protocolo.release.ManifestoRelease.FormatoInstalado.INSTALADOR);
+    }
+
     /** Instalador do atualizador, a partir do plano (SO corrente). */
     public static AplicadorAtualizacao.Instalador paraEsteSo(PlanoAtualizacao plano) {
         DiretoriosDoAgente dirs = new DiretoriosDoAgente(Path.of(plano.dirDados()));

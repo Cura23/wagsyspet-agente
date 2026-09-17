@@ -34,7 +34,20 @@ public final class GerenteAtualizacao {
     public static final Duration VERIFICACAO_INICIAL = Duration.ofMinutes(2);
     public static final Duration INTERVALO_VERIFICACAO = Duration.ofHours(6);
     public static final Duration RECUSA = Duration.ofHours(24);
-    public static final int BOOTS_ATE_REVERTER = 2;
+    /**
+     * Fecho F6: quantas vezes a MESMA versão pode falhar nesta máquina antes de o agente desistir dela (D4: "24 h / 3
+     * tentativas"). O contador era gravado e nunca lido: uma máquina onde o instalador falha sempre (antivírus, cache do MSI
+     * apagado, .deb sem senha) baixava ~70 MB, derrubava o agente e rodava o instalador TODO DIA, para sempre. Só uma versão
+     * MAIOR zera a conta.
+     */
+    public static final int TENTATIVAS_POR_VERSAO = 3;
+    /**
+     * A partir de qual boot sem confirmação a sentinela reverte. Era 2 — mas aí um 1º boot SAUDÁVEL interrompido antes dos
+     * 60 s da confirmação (o update roda com o caixa parado: fecharam a loja e desligaram o PC) revertia uma versão boa na
+     * manhã seguinte, com o agente fora do ar na abertura. O 2º boot agora também tenta; com o keepalive de 1 min, uma versão
+     * ruim de verdade custa 1 min a mais.
+     */
+    public static final int BOOTS_ATE_REVERTER = 3;
     public static final String ARQUIVO_PLANO = "plano.json";
     public static final String ARQUIVO_ESTADO = "estado.json";
 
@@ -145,9 +158,15 @@ public final class GerenteAtualizacao {
         }
         ManifestoRelease m = a.manifesto().orElseThrow();
         ManifestoRelease.Artefato art = a.artefato().orElseThrow();
-        Optional<EstadoAtualizacao.Recusada> recusada = e.recusada().filter(r -> VersaoSemantica.comparar(r.versao(), m.versao()) == 0 && r.ate().isAfter(agora));
+        Optional<EstadoAtualizacao.Recusada> recusada = e.recusada().filter(r -> VersaoSemantica.comparar(r.versao(), m.versao()) == 0
+                && (r.ate().isAfter(agora) || r.tentativas() >= TENTATIVAS_POR_VERSAO));
         if (recusada.isPresent()) {
-            log.info("Versão {} recusada até {} (falhou ao aplicar); não baixo de novo", m.versao(), recusada.get().ate());
+            if (recusada.get().tentativas() >= TENTATIVAS_POR_VERSAO) {
+                log.info("Versão {} falhou {} vezes nesta máquina: não tento mais (só uma versão maior); instale manualmente se precisar",
+                        m.versao(), recusada.get().tentativas());
+            } else {
+                log.info("Versão {} recusada até {} (falhou ao aplicar); não baixo de novo", m.versao(), recusada.get().ate());
+            }
             gravar(e.comVerificacao(agora, etag, m.versao()));
             return Situacao.ADIADO;
         }
@@ -186,6 +205,18 @@ public final class GerenteAtualizacao {
         });
     }
 
+    /** A versão que esgotou as {@link #TENTATIVAS_POR_VERSAO} nesta máquina (a UI avisa que ela precisa ser instalada à mão). */
+    public Optional<String> esgotada() {
+        return esgotada(estado.ler());
+    }
+
+    /** Só vale enquanto a versão esgotada ainda é a PUBLICADA: saiu uma maior, a história é outra. */
+    private static Optional<String> esgotada(EstadoAtualizacao.Estado e) {
+        return e.recusada().filter(r -> r.tentativas() >= TENTATIVAS_POR_VERSAO)
+                .filter(r -> e.versaoDisponivel().map(v -> VersaoSemantica.comparar(v, r.versao()) == 0).orElse(true))
+                .map(EstadoAtualizacao.Recusada::versao);
+    }
+
     /** Pode aplicar agora? Instalador baixado E (ocioso há pelo menos {@link #OCIOSIDADE_MINIMA}). */
     public boolean podeAplicar(boolean ocioso, Duration ociosoHa) {
         return estado.ler().artefatoBaixado().isPresent() && estado.ler().emAplicacao().isEmpty()
@@ -213,11 +244,18 @@ public final class GerenteAtualizacao {
         return destino;
     }
 
-    /** Desfaz {@link #prepararAplicacao} quando o lançador falhou antes de sair (o agente continua na versão atual). */
+    /**
+     * Desfaz {@link #prepararAplicacao} quando o lançador falhou antes de sair (o agente continua na versão atual). CONTA como
+     * tentativa e entra no recuo de 24 h: só limpar o estado deixava o artefato baixado, e {@link #podeAplicar} voltava a dar
+     * {@code true} 5 min depois — a cada volta o agente fechava as conexões do PDV com ATUALIZANDO e falhava de novo.
+     */
     public synchronized void abortarAplicacao(String motivo) {
         EstadoAtualizacao.Estado e = estado.ler();
-        e.emAplicacao().ifPresent(ap -> log.warn("Aplicação de {} abortada: {}", ap.versaoNova(), motivo));
-        gravar(e.comEmAplicacao(null, 0));
+        if (e.emAplicacao().isEmpty()) {
+            return;
+        }
+        log.warn("Aplicação de {} abortada: {}", e.emAplicacao().get().versaoNova(), motivo);
+        registrarRecusa(estado, e.emAplicacao().get(), relogio, "o atualizador não pôde ser lançado: " + motivo);
     }
 
     /** Sentinela de boot: conta a tentativa e decide. */
@@ -260,7 +298,7 @@ public final class GerenteAtualizacao {
             log.warn("Agente subiu na versão {} com atualização para {} pendente: o atualizador não aplicou — recusando por 24 h",
                     verificador.versaoAtual(), ap.get().versaoNova());
             apagarBaixado(e);
-            gravar(e.comRecusada(new EstadoAtualizacao.Recusada(ap.get().versaoNova(), agora.plus(RECUSA), e.recusada().map(r -> r.tentativas() + 1).orElse(1))));
+            gravar(e.comRecusada(new EstadoAtualizacao.Recusada(ap.get().versaoNova(), agora.plus(RECUSA), tentativasDe(e, ap.get().versaoNova()) + 1)));
         }
     }
 
@@ -274,12 +312,17 @@ public final class GerenteAtualizacao {
         EstadoAtualizacao.Estado e = estado.ler();
         log.warn("Versão {} revertida/recusada: {}", ap.versaoNova(), motivo);
         apagarBaixado(e);
-        int tentativas = e.recusada().filter(r -> r.versao().equals(ap.versaoNova())).map(r -> r.tentativas() + 1).orElse(1);
+        int tentativas = tentativasDe(e, ap.versaoNova()) + 1;
         try {
             estado.gravar(e.comRecusada(new EstadoAtualizacao.Recusada(ap.versaoNova(), relogio.instant().plus(RECUSA), tentativas)));
         } catch (IOException ex) {
             log.error("Não consegui gravar a recusa da versão {}: {}", ap.versaoNova(), ex.toString());
         }
+    }
+
+    /** Falhas já registradas para ESTA versão (a recusa de outra versão não conta). */
+    private static int tentativasDe(EstadoAtualizacao.Estado e, String versao) {
+        return e.recusada().filter(r -> VersaoSemantica.comparar(r.versao(), versao) == 0).map(EstadoAtualizacao.Recusada::tentativas).orElse(0);
     }
 
     /** Quem só tem o {@code estado.json} (atualizador) esquece a troca em curso sem recusar a versão. */
@@ -301,6 +344,10 @@ public final class GerenteAtualizacao {
         }
         if (e.artefatoBaixado().isPresent()) {
             return "versão " + e.artefatoBaixado().get().versao() + " baixada, aguardando o caixa ficar ocioso";
+        }
+        if (esgotada(e).isPresent()) {
+            return "versão " + e.recusada().get().versao() + " não instalou aqui (" + e.recusada().get().tentativas()
+                    + " tentativas): não tento mais — instale manualmente ou aguarde a próxima versão";
         }
         if (e.recusada().filter(r -> r.ate().isAfter(relogio.instant())).isPresent()) {
             return "versão " + e.recusada().get().versao() + " recusada até " + e.recusada().get().ate();
@@ -335,7 +382,8 @@ public final class GerenteAtualizacao {
         });
     }
 
-    static boolean shaConfere(Path arquivo, String sha256) {
+    /** {@code true} só se o arquivo existe e o SHA-256 dele é exatamente {@code sha256} (hex). Nunca lança. */
+    public static boolean shaConfere(Path arquivo, String sha256) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             try (var in = Files.newInputStream(arquivo)) {

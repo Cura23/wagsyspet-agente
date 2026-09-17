@@ -82,6 +82,46 @@ class PlataformaAtualizacaoTest {
     }
 
     @Test
+    @DisplayName("Fecho F6 — macOS REAL: o atualizador nasce de 'open -n -a' e o ambiente NÃO tem UID (é variável interna do shell) → resolve com 'id -u' e usa o launchd; sem isso o agente novo virava filho solto e, se caísse no 1º boot, ninguém dava o 2º boot que a sentinela precisa para reverter")
+    void macSemUidNoAmbiente(@TempDir Path tmp) throws Exception {
+        Path launcher = tmp.resolve("X.app/Contents/MacOS").resolve(NOME);
+        Path plist = tmp.resolve("Library/LaunchAgents/br.com.agroease.agente.impressao.plist"); Files.createDirectories(plist.getParent()); Files.writeString(plist, "<plist/>");
+        List<Path> diretos = new ArrayList<>();
+        Cmd cmd = new Cmd() {
+            @Override public Saida executar(List<String> comando) { chamadas.add(List.copyOf(comando)); return comando.equals(List.of("id", "-u")) ? new Saida(0, "502") : new Saida(0, ""); }
+        };
+        Relancadores.paraSo("Mac OS X", tmp, Map.of("HOME", tmp.toString(), "USER", "loja"), cmd, diretos::add).relancar(launcher);
+        assertThat(cmd.chamadas).containsExactly(List.of("id", "-u"), List.of("launchctl", "kickstart", "-k", "gui/502/br.com.agroease.agente.impressao"));
+        assertThat(diretos).isEmpty();
+
+        // nem o 'id -u' respondeu: aí sim, direto (nunca ficar sem agente)
+        Cmd semId = new Cmd() {
+            @Override public Saida executar(List<String> comando) { chamadas.add(List.copyOf(comando)); return new Saida(1, ""); }
+        };
+        Relancadores.paraSo("Mac OS X", tmp, Map.of(), semId, diretos::add).relancar(launcher);
+        assertThat(diretos).containsExactly(launcher);
+    }
+
+    @Test
+    @DisplayName("Fecho F6 — supervisor que FALHA ao relançar (schtasks /run ≠ 0, systemctl start ≠ 0, kickstart ≠ 0) cai no lançamento DIRETO: antes a exceção subia, a tarefa do Windows ficava PAUSADA (o update a pausou) e a loja ficava sem agente até o próximo logon")
+    void supervisorFalhandoCaiNoDireto(@TempDir Path tmp) throws Exception {
+        Path launcher = tmp.resolve("bin").resolve(NOME);
+        List<Path> diretos = new ArrayList<>();
+        Cmd runFalha = new Cmd() {
+            @Override public Saida executar(List<String> comando) { chamadas.add(List.copyOf(comando)); return comando.contains("/run") ? new Saida(1, "ERROR: Access is denied.") : new Saida(0, ""); }
+        };
+        Relancadores.paraSo("Windows 11", tmp, Map.of(), runFalha, diretos::add).relancar(launcher);
+        assertThat(diretos).containsExactly(launcher);
+
+        Path unit = tmp.resolve(".config/systemd/user/agroease-agente-impressao.service"); Files.createDirectories(unit.getParent()); Files.writeString(unit, "[Unit]");
+        Cmd systemctlFalha = new Cmd() {
+            @Override public Saida executar(List<String> comando) { chamadas.add(List.copyOf(comando)); return new Saida(1, "Failed to connect to bus"); }
+        };
+        Relancadores.paraSo("Linux", tmp, Map.of(), systemctlFalha, diretos::add).relancar(launcher);
+        assertThat(diretos).hasSize(2);
+    }
+
+    @Test
     @DisplayName("LancadorAtualizadorDeFora: copia o app-image para <dados>/atualizacao/atualizador/ (1× por versão) e lança a CÓPIA: Linux sob systemd → systemd-run --user; senão direto; macOS → open -n -a … --args")
     void lancadorDeFora(@TempDir Path tmp) throws Exception {
         Path raiz = InstaladorTrocaDeDiretorioTest.appImage(tmp.resolve("opt"), "1.0.0");

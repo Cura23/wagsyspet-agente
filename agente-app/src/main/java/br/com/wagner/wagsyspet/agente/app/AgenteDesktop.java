@@ -65,8 +65,25 @@ final class AgenteDesktop implements AcoesUi.Agente {
      * Peças do self-update (F6-L1), injetáveis para teste: o gerente (verifica/baixa/plano/sentinela), quem lança o atualizador
      * externo, quem reverte, e os prazos (verificação inicial e periódica, intervalo entre tentativas de aplicar, prazo de saúde).
      */
+    /**
+     * @param aplicaSozinho {@code false} quando o instalador deste SO/formato só funciona com a PESSOA presente (Linux .deb:
+     *                      {@code pkexec dpkg -i} pede a senha de administrador). Aí o agente NÃO aplica por ociosidade — sairia,
+     *                      o instalador recusaria o gatilho AUTO, o download seria apagado e o clique "Atualizar…" (o único
+     *                      caminho que funciona) ficaria bloqueado por 24 h, todo dia (Fecho F6).
+     */
     record Atualizacao(GerenteAtualizacao gerente, LancadorAtualizador lancador, Reversor reversor,
-                       Duration verificacaoInicial, Duration intervaloVerificacao, Duration intervaloTentativa, Duration prazoSaude) {
+                       Duration verificacaoInicial, Duration intervaloVerificacao, Duration intervaloTentativa, Duration prazoSaude,
+                       boolean aplicaSozinho) {
+        Atualizacao(GerenteAtualizacao gerente, LancadorAtualizador lancador, Reversor reversor,
+                    Duration verificacaoInicial, Duration intervaloVerificacao, Duration intervaloTentativa, Duration prazoSaude) {
+            this(gerente, lancador, reversor, verificacaoInicial, intervaloVerificacao, intervaloTentativa, prazoSaude, true);
+        }
+
+        /** A mesma fiação, para um instalador que exige o clique. */
+        Atualizacao assistida() {
+            return new Atualizacao(gerente, lancador, reversor, verificacaoInicial, intervaloVerificacao, intervaloTentativa, prazoSaude, false);
+        }
+
         /** @param pausarSupervisor/retomarSupervisor keepalive do Windows — o reversor de lá sai para o atualizador instalar a versão anterior */
         static Atualizacao padrao(DiretoriosDoAgente dirs, String versao, Runnable pausarSupervisor, Runnable retomarSupervisor) {
             ManifestoRelease.FormatoInstalado formato = ComandosAtualizacao.formatoInstalado(Autostart.launcherDesteProcesso(), Path.of(System.getProperty("user.home", ".")));
@@ -80,7 +97,8 @@ final class AgenteDesktop implements AcoesUi.Agente {
             });
             return new Atualizacao(ComandosAtualizacao.gerentePadrao(dirs, versao), deFora,
                     br.com.wagner.wagsyspet.agente.app.atualizacao.Instaladores.reversorDesteSo(dirs, formato, deFora, pausarSupervisor, retomarSupervisor),
-                    GerenteAtualizacao.VERIFICACAO_INICIAL, GerenteAtualizacao.INTERVALO_VERIFICACAO, Duration.ofSeconds(30), GerenteAtualizacao.PRAZO_SAUDE);
+                    GerenteAtualizacao.VERIFICACAO_INICIAL, GerenteAtualizacao.INTERVALO_VERIFICACAO, Duration.ofSeconds(30), GerenteAtualizacao.PRAZO_SAUDE,
+                    br.com.wagner.wagsyspet.agente.app.atualizacao.Instaladores.aplicaSozinho(System.getProperty("os.name", ""), formato));
         }
     }
     /** Re-subidas automáticas antes de desistir (exit 3): Windows/Linux-sem-systemd não têm supervisor (adversarial L4-A4). */
@@ -391,12 +409,23 @@ final class AgenteDesktop implements AcoesUi.Agente {
                 if (ui != null) {
                     ui.atualizacao(v);
                 }
+                long dia = System.currentTimeMillis() / 86_400_000L;
                 if (s == GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO && v.isPresent()) {
-                    long dia = System.currentTimeMillis() / 86_400_000L;
                     if (ui != null && dia != ultimoAvisoAtualizacaoDia) {
                         ultimoAvisoAtualizacaoDia = dia;
-                        ui.aviso("Agente de Impressão AgroEase", "Versão " + v.get() + " pronta. O agente se atualiza sozinho quando o caixa ficar parado, ou use \"Atualizar\".");
+                        ui.aviso("Agente de Impressão AgroEase", at.aplicaSozinho()
+                                ? "Versão " + v.get() + " pronta. O agente se atualiza sozinho quando o caixa ficar parado, ou use \"Atualizar\"."
+                                : "Versão " + v.get() + " pronta. Clique em \"Atualizar\" para instalar (o sistema vai pedir a senha de administrador).");
                     }
+                } else if (s == GerenteAtualizacao.Situacao.ADIADO) {
+                    // esgotou as tentativas NESTA máquina: sem este aviso ninguém fica sabendo que o update não entra
+                    at.gerente().esgotada().ifPresent(esgotada -> {
+                        if (ui != null && dia != ultimoAvisoAtualizacaoDia) {
+                            ultimoAvisoAtualizacaoDia = dia;
+                            ui.aviso("Agente de Impressão AgroEase", "A versão " + esgotada + " não instalou neste computador depois de "
+                                    + GerenteAtualizacao.TENTATIVAS_POR_VERSAO + " tentativas. Baixe o instalador na página do agente e instale por cima.");
+                        }
+                    });
                 }
             } catch (RuntimeException e) {
                 log.warn("Verificação de atualização falhou: {}", e.toString());
@@ -410,7 +439,8 @@ final class AgenteDesktop implements AcoesUi.Agente {
             ServidorAgente s = servidor;
             boolean ocioso = s == null || s.ocioso();
             Duration ha = s == null ? Duration.ofDays(1) : s.ociosoHa();
-            if (!aplicandoAtualizacao && at.gerente().podeAplicar(ocioso, ha)) {
+            // instalador assistido (Linux .deb): só o clique aplica — o download fica esperando
+            if (at.aplicaSozinho() && !aplicandoAtualizacao && at.gerente().podeAplicar(ocioso, ha)) {
                 aplicarAtualizacao("ociosidade");
             }
         });

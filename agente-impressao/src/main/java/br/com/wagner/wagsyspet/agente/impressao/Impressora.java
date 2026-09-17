@@ -99,6 +99,11 @@ public final class Impressora {
         return ImpressoraJavaxPrint.impressoraPadrao();
     }
 
+    /** Fecho F6: por que o pulso da GAVETA não deve ir agora para esta impressora (offline, fila parada, pulso já preso); vazio = pode. */
+    public Optional<String> impedimentoDaGaveta(String impressora) {
+        return br.com.wagner.wagsyspet.agente.impressao.spooler.PreVooGaveta.impedimento(sistema == Sistema.WINDOWS, impressora);
+    }
+
     /** Envia bytes crus do catálogo (gaveta/corte) como um job SEPARADO na mesma fila, pelo caminho certo para o SO. */
     public Resultado enviarRaw(byte[] bytes, String impressora, String nomeJob) {
         return ((sistema == Sistema.WINDOWS) ? rawWindows : rawUnix).enviarRaw(bytes, impressora, nomeJob);

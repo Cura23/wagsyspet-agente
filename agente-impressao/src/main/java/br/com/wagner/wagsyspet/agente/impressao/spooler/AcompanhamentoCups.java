@@ -126,6 +126,11 @@ public final class AcompanhamentoCups implements AcompanhamentoSpooler {
             ComandoSpooler.Saida impressora = lpstat.apply(List.of(LPSTAT, "-l", "-p", fila));
             return ClassificadorCups.classificar(jobId, naFila.texto(), "", impressora.ok() ? impressora.texto() : "");
         }
+        if (porFila.estado() == Estado.FALHOU) {
+            // o job ESTÁ na fila, parado por erro (filtro/backend): a resposta é esta. Ir ao histórico — onde ele não está —
+            // devolvia "sumiu da fila" encerrado, e o PWA ficava calado com o cupom parado para sempre (Fecho F6).
+            return porFila;
+        }
         ComandoSpooler.Saida historico = lpstat.apply(List.of(LPSTAT, "-W", "completed", "-l", "-o", fila));
         if (!historico.ok()) {
             return indisponivel(historico);
