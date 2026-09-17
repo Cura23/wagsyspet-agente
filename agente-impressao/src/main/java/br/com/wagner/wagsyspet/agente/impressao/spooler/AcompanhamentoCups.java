@@ -36,6 +36,10 @@ public final class AcompanhamentoCups implements AcompanhamentoSpooler {
         this.lpstat = lpstat;
     }
 
+    public static boolean lpstatDisponivel() {
+        return java.nio.file.Files.isExecutable(java.nio.file.Path.of(LPSTAT));
+    }
+
     public String jobId() {
         return jobId;
     }

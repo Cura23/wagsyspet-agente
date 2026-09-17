@@ -30,6 +30,9 @@ final class PortaImpressaoFake implements PortaImpressao {
     /** Enquanto != null, listar() espera o trinco (motor de listagem preso — spooler/CUPS fora). */
     final AtomicReference<CountDownLatch> trincoListar = new AtomicReference<>();
 
+    /** F6-L4: quando != null, todo job ACEITO nasce com este acompanhamento do spooler (recebe o nomeJob). */
+    volatile java.util.function.Function<String, br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoSpooler> acompanhamento;
+
     PortaImpressaoFake(String... nomes) {
         this.nomes = List.of(nomes);
     }
@@ -73,6 +76,7 @@ final class PortaImpressaoFake implements PortaImpressao {
         if (impressora.equals(impressoraComErro)) {
             return new Resultado(Estado.ERRO, impressora, "spooler recusou (fake)");
         }
-        return new Resultado(Estado.ACEITO_SPOOLER, impressora, "job aceito (fake)");
+        var a = acompanhamento;
+        return new Resultado(Estado.ACEITO_SPOOLER, impressora, "job aceito (fake)", a == null ? null : a.apply(nomeJob));
     }
 }

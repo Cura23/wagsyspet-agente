@@ -36,6 +36,13 @@ final class FilaImpressao implements AutoCloseable {
         void prazoEstourado();
 
         void filaCheia();
+
+        /**
+         * O motor respondeu DEPOIS do prazo (o PWA já recebeu ERRO). F6-L4: deixa de ser só um log — se o spooler aceitou, o
+         * observador acompanha e o PWA fica sabendo que o cupom saiu atrasado (não reimprimir).
+         */
+        default void concluidoTarde(Resultado r) {
+        }
     }
 
     /** Job rodando há mais que {@code prazo × FATOR_MOTOR_PRESO} = motor de impressão travado (spooler/CUPS pendurado). */
@@ -75,6 +82,11 @@ final class FilaImpressao implements AutoCloseable {
             } else {
                 log.warn("Impressão {} concluiu DEPOIS do prazo de {} ({} — {}); o PWA já recebeu ERRO — possível duplicata se reimprimir",
                         descricao, prazo, r.estado(), r.detalhe());
+                try {
+                    resposta.concluidoTarde(r);
+                } catch (RuntimeException e) {
+                    log.warn("concluidoTarde de {} falhou: {}", descricao, e.toString());
+                }
             }
         };
         try {

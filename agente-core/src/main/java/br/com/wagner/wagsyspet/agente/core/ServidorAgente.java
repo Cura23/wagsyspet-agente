@@ -102,6 +102,10 @@ public class ServidorAgente extends WebSocketServer {
         public int conexaoPerdidaSegundos = 20;
         /** Conexões simultâneas (pré e pós-auth). Heap de 128 MB × frames de até 4 MiB. */
         public int tetoConexoes = 8;
+        /** F6 D9: por quanto tempo o agente observa o job no spooler antes de fechar o estado (PENDENTE = "confira a impressora"). */
+        public Duration observacaoImpressao = Duration.ofSeconds(60);
+        /** Cadência das consultas ao spooler nos primeiros segundos (depois relaxa 4×). */
+        public Duration cadenciaObservacao = Duration.ofMillis(400);
     }
 
     private final Set<String> originsPermitidas;
@@ -126,6 +130,7 @@ public class ServidorAgente extends WebSocketServer {
     private final ScheduledExecutorService agenda;
     private final ExecutorService listagem;
     private final FilaImpressao fila;
+    private final ObservadorImpressao observador;
     private volatile ScheduledFuture<?> zelador;
 
     /**
@@ -147,6 +152,7 @@ public class ServidorAgente extends WebSocketServer {
         this.listagem = new java.util.concurrent.ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                 new java.util.concurrent.ArrayBlockingQueue<>(4), daemon("agente-listagem"));
         this.fila = new FilaImpressao(agenda, prazos.impressao);
+        this.observador = new ObservadorImpressao(prazos.observacaoImpressao, prazos.cadenciaObservacao);
         setReuseAddr(true);
         setConnectionLostTimeout(prazos.conexaoPerdidaSegundos);
     }
@@ -256,6 +262,7 @@ public class ServidorAgente extends WebSocketServer {
             z.cancel(false);
         }
         fila.close();
+        observador.close();
         listagem.shutdownNow();
         agenda.shutdownNow();
     }
@@ -395,6 +402,7 @@ public class ServidorAgente extends WebSocketServer {
                         case "listar_impressoras" -> listarImpressoras(conn, id);
                         case "selecionar_impressora" -> selecionarImpressora(conn, sessao, id, msg);
                         case "imprimir" -> imprimir(conn, sessao, id, msg);
+                        case "consultar_impressao" -> consultarImpressao(conn, id);
                         default -> enviar(conn, Mensagens.erro(id, Mensagens.TIPO_DESCONHECIDO, "Tipo de mensagem não reconhecido: " + tipo));
                     }
                 }
@@ -589,7 +597,10 @@ public class ServidorAgente extends WebSocketServer {
             public void concluido(Resultado r) {
                 log.info("Impressão {} → {} ({})", descricao, r.estado(), r.detalhe());
                 switch (r.estado()) {
-                    case ACEITO_SPOOLER -> enviar(conn, Mensagens.imprimirOk(id));
+                    case ACEITO_SPOOLER -> {
+                        enviar(conn, Mensagens.imprimirOk(id)); // imediato e inalterado (contrato F2); o estado do spooler vem DEPOIS
+                        acompanhar(conn, id, r);
+                    }
                     case IMPRESSORA_INDISPONIVEL -> enviar(conn, Mensagens.imprimirErro(id, Mensagens.IMPRESSORA_INDISPONIVEL,
                             "Impressora '" + impressora + "' não encontrada neste computador. Confira se está ligada e instalada."));
                     default -> enviar(conn, Mensagens.imprimirErro(id, Mensagens.ERRO,
@@ -605,12 +616,44 @@ public class ServidorAgente extends WebSocketServer {
             }
 
             @Override
+            public void concluidoTarde(Resultado r) {
+                if (r.aceito()) {
+                    acompanhar(conn, id, r); // o PWA já mostrou erro: se o cupom sair, ele fica sabendo — não reimprimir
+                }
+            }
+
+            @Override
             public void filaCheia() {
                 log.warn("Fila de impressão cheia; recusando {}", descricao);
                 enviar(conn, Mensagens.imprimirErro(id, Mensagens.ERRO,
                         "O agente está ocupado com outra impressão. Tente de novo em instantes."));
             }
         });
+    }
+
+    /**
+     * F6 D9 — depois do aceite, o observador pergunta ao spooler e, quando fecha o estado, empurra UM {@code impressao_estado} se a
+     * conexão ainda estiver aberta (o PWA fecha a ociosa em 20 s: aí ele puxa com {@code consultar_impressao}). Frame de TIPO novo:
+     * o PWA F2/F3 ignora (D6 — nunca reaproveitar imprimir_ok/erro).
+     */
+    private void acompanhar(WebSocket conn, String id, Resultado r) {
+        if (r.acompanhamento().isEmpty()) {
+            observador.semAcompanhamento(id, "o motor de impressão deste computador não informa o estado do job");
+            return;
+        }
+        observador.observar(id, r.acompanhamento().get(), estado -> {
+            if (conn.isOpen()) {
+                enviar(conn, Mensagens.impressaoEstado(id, estado));
+            }
+        });
+    }
+
+    private void consultarImpressao(WebSocket conn, String id) {
+        if (id == null) {
+            enviar(conn, Mensagens.erro(null, Mensagens.MENSAGEM_INVALIDA, "consultar_impressao exige id"));
+            return;
+        }
+        enviar(conn, Mensagens.impressaoEstado(id, observador.consultar(id)));
     }
 
     // ── zelador / utilitários ──────────────────────────────────────────────────────────────────────────────────

@@ -95,8 +95,15 @@ jobs:
         shell: bash
         run: |
           # -am: agente-core depende de agente-protocolo (F3-L0) e o passo 1 não instala nada no repositório local
+          # F6-L4 (Linux): fila que ACEITA jobs mas está DESABILITADA — o cupom nunca sai e o lp diz "aceito"; o agente tem de dizer
+          # PENDENTE{FILA_PARADA} e, cancelado o job, FALHOU{CANCELADO} (CupsFilaParadaEnvTest, CUPS real)
+          PARADA=""
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo lpadmin -p AGROEASE_PARADA -E -v socket://127.0.0.1:9 -m raw && sudo cupsdisable AGROEASE_PARADA && PARADA="-Dimpressora.parada=AGROEASE_PARADA"
+            LC_ALL=C lpstat -l -p AGROEASE_PARADA | head -3
+          fi
           ./mvnw -B -ntp $REVISAO_ARG -pl agente-impressao,agente-core -am test -Djava.awt.headless=true -Dsun.java2d.print.polling=false \
-            "-Dimpressora.virtual=${IMPRESSORA_VIRTUAL}" "-Dimpressao.saida=${IMPRESSAO_SAIDA}"
+            "-Dimpressora.virtual=${IMPRESSORA_VIRTUAL}" "-Dimpressao.saida=${IMPRESSAO_SAIDA}" $PARADA
 
       # ── Empacotamento: o MESMO código dos testes vira o binário que a loja instala (jlink + jpackage) ─────────────
       # Os passos abaixo dependem SÓ dos unitários: um vermelho na impressão virtual (ambiente do runner) não pode
@@ -145,7 +152,12 @@ jobs:
             DEPS=$(dpkg-deb -f "$DIST"/*.deb Depends); echo "Depends do .deb: $DEPS"
             grep -q "t64" <<<"$DEPS" && { echo ".deb com dependência t64 (host de build novo demais) — não instala em Ubuntu 22.04/Debian 12"; exit 1; }
           fi
-          echo "== --diagnostico"; "$BIN" --diagnostico
+          echo "== --diagnostico"; "$BIN" --diagnostico | tee "$RUNNER_TEMP/diagnostico.txt"
+          # F6-L4: o binário EMPACOTADO (runtime do jlink) consegue perguntar ao spooler — no Windows isso é a jnidispatch.dll do JNA carregando
+          case "$RUNNER_OS" in
+            macOS) grep -q "estado do cupom no spooler: " "$RUNNER_TEMP/diagnostico.txt" ;;   # runner sem CUPS cliente garantido: só informativo
+            *)     grep -q "estado do cupom no spooler: disponível" "$RUNNER_TEMP/diagnostico.txt" || { echo "acompanhamento do spooler indisponível no binário empacotado"; exit 1; } ;;
+          esac
           if [ -n "${IMPRESSORA_VIRTUAL:-}" ]; then
             echo "== impressão real pelo binário em '$IMPRESSORA_VIRTUAL'"
             "$BIN" --gerar-pdf-teste agente-app/target/teste-smoke.pdf

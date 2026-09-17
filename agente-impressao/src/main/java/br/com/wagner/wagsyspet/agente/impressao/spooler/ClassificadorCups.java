@@ -50,8 +50,10 @@ public final class ClassificadorCups {
         if (alertas.contains("job-completed-successfully") || alertas.contains("job-completed-with-warnings")) {
             return EstadoSpooler.impresso(detalhe + " — dados entregues ao dispositivo");
         }
-        // terminou sem dizer como (CUPS antigo sem job-state-reasons no lpstat): não afirmar "impresso"
-        return EstadoSpooler.desconhecido(null, detalhe + " — terminou sem motivo informado");
+        // Saiu da fila SEM registro de conclusão. CUPS real (2.4): é o job cancelado antes de começar a processar ("Alerts: none", sem
+        // job-canceled-by-user). Todo job impresso traz job-completed-successfully; sem isso, NÃO imprimiu — e o operador precisa do
+        // "confira antes de reimprimir", não de um "não sei".
+        return EstadoSpooler.falhou(Motivo.CANCELADO, detalhe + " — saiu da fila sem registro de conclusão (cancelado antes de imprimir)");
     }
 
     private static EstadoSpooler classificarPendente(String jobId, Bloco job, String impressora) {

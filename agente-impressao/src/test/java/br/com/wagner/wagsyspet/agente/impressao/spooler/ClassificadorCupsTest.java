@@ -51,6 +51,16 @@ class ClassificadorCupsTest {
     }
 
     @Test
+    @DisplayName("CUPS real (achado do teste de integração): job cancelado ANTES de começar a processar termina com 'Alerts: none' — sem job-canceled-by-user. Todo job impresso traz job-completed-successfully; terminou SEM isso = NÃO imprimiu → FALHOU{CANCELADO}, nunca 'desconhecido' (o operador precisa do 'confira antes de reimprimir')")
+    void canceladoAntesDeProcessar() {
+        EstadoSpooler e = ClassificadorCups.classificar("AGROEASE_PARADA-54", "", fixture("completos-cancelado-antes-de-processar.txt"), "");
+        assertThat(e.estado()).isEqualTo(Estado.FALHOU);
+        assertThat(e.motivo()).isEqualTo(Motivo.CANCELADO);
+        assertThat(e.encerrado()).isTrue();
+        assertThat(e.detalhe()).containsIgnoringCase("sem registro de conclusão");
+    }
+
+    @Test
     @DisplayName("job ainda em not-completed → PENDENTE não encerrado, com o motivo tirado da FILA: 'disabled since'/'Alerts: paused' → FILA_PARADA; 'may not exist or is unavailable' ou connecting-to-device → IMPRESSORA_OFFLINE; media-empty → SEM_PAPEL; door-open → TAMPA_ABERTA; nada reconhecido → sem motivo")
     void pendente() {
         EstadoSpooler parada = ClassificadorCups.classificar("AGROEASE_TESTE_MORTA-50", fixture("nao-completos-fila-parada.txt"), "", fixture("impressora-fila-parada.txt"));

@@ -85,6 +85,17 @@ class ImpressaoRealEnvTest {
             assertThat(r.get("id").asText()).isEqualTo(id);
             assertThat(r.get("estado").asText()).isEqualTo("ACEITO_SPOOLER");
 
+            // F6-L4: no MESMO socket, o estado REAL do spooler do SO chega depois do aceite (cups-pdf / Print to PDF → IMPRESSO)
+            JsonNode estado = c.proximaMensagem(45);
+            System.out.println("[E2E] estado do spooler=" + estado);
+            assertThat(estado.get("tipo").asText()).isEqualTo("impressao_estado");
+            assertThat(estado.get("id").asText()).isEqualTo(id);
+            assertThat(estado.get("estado").asText()).as("detalhe: %s", estado.get("detalhe")).isEqualTo("IMPRESSO");
+            assertThat(estado.get("encerrado").asBoolean()).isTrue();
+            // e o pull devolve o mesmo, como o PWA faria por outra conexão
+            c.send("{\"tipo\":\"consultar_impressao\",\"id\":\"" + id + "\"}");
+            assertThat(c.proximaMensagem(10).get("estado").asText()).isEqualTo("IMPRESSO");
+
             Optional<Path> gerado = esperarSaida(id, antes);
             assertThat(gerado).as("saída esperada em %s (job %s)", saida, id).isPresent();
             assertThat(Files.size(gerado.get())).isGreaterThan(300);

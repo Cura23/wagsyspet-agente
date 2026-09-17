@@ -77,6 +77,23 @@ public final class AcompanhamentoWindows implements AcompanhamentoSpooler {
         }
     }
 
+    /**
+     * Para o {@code --diagnostico}: o estado do job no spooler está disponível NESTE binário? No Windows carrega de verdade a
+     * biblioteca nativa (JNA extrai a {@code jnidispatch.dll} do jar no 1º uso) e o {@code winspool.drv}; fora dele quem acompanha é o
+     * {@code lpstat}.
+     */
+    public static String diagnostico() {
+        if (!System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win")) {
+            return AcompanhamentoCups.lpstatDisponivel() ? "disponível (CUPS: lpstat)" : "indisponível (/usr/bin/lpstat ausente — instale cups-client)";
+        }
+        try {
+            com.sun.jna.platform.win32.Winspool.INSTANCE.hashCode(); // força o carregamento nativo
+            return "disponível (Windows: winspool via JNA " + com.sun.jna.Native.VERSION + ")";
+        } catch (RuntimeException | LinkageError e) {
+            return "indisponível (" + e + ") — a impressão funciona; só não há aviso de cupom preso";
+        }
+    }
+
     private void vigiar() {
         long inicio = System.nanoTime();
         try {

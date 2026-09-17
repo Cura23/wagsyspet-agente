@@ -62,6 +62,8 @@ class ContratoF3Test {
         prazos.auth = Duration.ofSeconds(90);
         prazos.impressao = Duration.ofMillis(1500);
         prazos.ociosoAutenticado = Duration.ofMinutes(2);
+        prazos.observacaoImpressao = Duration.ofMillis(900);
+        prazos.cadenciaObservacao = Duration.ofMillis(30);
         servidor = novoServidor();
         servidor.iniciar(Duration.ofSeconds(10));
     }
@@ -124,6 +126,10 @@ class ContratoF3Test {
             assertThat(r.get("protocolo").isInt()).as("protocolo NÚMERO").isTrue();
             assertThat(r.get("so").isTextual()).isTrue();
             assertThat(r.get("agenteId").asText()).isEqualTo(AGENTE_ID);
+            // F6 D6: capacidades = ARRAY de strings, opcional para o PWA antigo (que ignora campos a mais); evita o PWA novo perguntar
+            // consultar_impressao a um agente que só responderia TIPO_DESCONHECIDO
+            assertThat(r.get("capacidades").isArray()).isTrue();
+            assertThat(JSON.convertValue(r.get("capacidades"), java.util.List.class)).contains("estado_impressao", "atualizacao");
             c.close();
         }
     }
@@ -415,6 +421,124 @@ class ContratoF3Test {
     }
 
     // ── 8/9. imprimir ─────────────────────────────────────────────────────────────────────────────────────────
+
+    // ── F6-L4: estado REAL do spooler depois do aceite ──────────────────────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("F6-L4. estado da impressão (push impressao_estado + pull consultar_impressao)")
+    class EstadoDaImpressao {
+
+        private br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoSpooler roteiro(java.util.function.Supplier<br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler> s) {
+            return s::get;
+        }
+
+        @Test
+        @DisplayName("imprimir → imprimir_ok{ACEITO_SPOOLER} IMEDIATO (inalterado) e DEPOIS um único impressao_estado{id igual, estado:'IMPRESSO', detalhe, encerrado:true} — 'motivo' AUSENTE quando não há (o parser do PWA descarta tipo errado)")
+        void pushImpresso() throws Exception {
+            impressao.acompanhamento = job -> roteiro(() -> br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.impresso("CUPS job PDF-12"));
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            c.send(json("tipo", "imprimir", "id", "e-1", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF"));
+            assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_ok");
+            JsonNode e = c.proximaMensagem();
+            assertThat(e.get("tipo").asText()).isEqualTo("impressao_estado");
+            assertThat(e.get("id").asText()).isEqualTo("e-1");
+            assertThat(e.get("estado").asText()).isEqualTo("IMPRESSO");
+            assertThat(e.get("encerrado").isBoolean()).isTrue();
+            assertThat(e.get("encerrado").asBoolean()).isTrue();
+            assertThat(e.get("detalhe").asText()).contains("PDF-12");
+            assertThat(e.has("motivo")).isFalse();
+            c.close();
+        }
+
+        @Test
+        @DisplayName("impressora desligada: durante a janela o PULL devolve PENDENTE{IMPRESSORA_OFFLINE} encerrado:false; no fim da janela o PUSH traz o mesmo estado ENCERRADO — é o 'não reimprima, confira a impressora'")
+        void pendenteNoPullENoPush() throws Exception {
+            impressao.acompanhamento = job -> roteiro(() -> br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.pendente(
+                    br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.IMPRESSORA_OFFLINE, "desligada"));
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            c.send(json("tipo", "imprimir", "id", "e-2", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF"));
+            assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_ok");
+            Thread.sleep(150);
+            c.send(json("tipo", "consultar_impressao", "id", "e-2"));
+            JsonNode durante = c.proximaMensagem();
+            assertThat(durante.get("tipo").asText()).isEqualTo("impressao_estado");
+            assertThat(durante.get("estado").asText()).isEqualTo("PENDENTE");
+            assertThat(durante.get("motivo").asText()).isEqualTo("IMPRESSORA_OFFLINE");
+            assertThat(durante.get("encerrado").asBoolean()).isFalse();
+            JsonNode fim = c.proximaMensagem();
+            assertThat(fim.get("estado").asText()).isEqualTo("PENDENTE");
+            assertThat(fim.get("encerrado").asBoolean()).isTrue();
+            c.close();
+        }
+
+        @Test
+        @DisplayName("o PWA fecha o socket ocioso em 20 s: push em conexão fechada é inofensivo e o estado fica guardado — uma conexão NOVA (mesmo de outra Origin autenticada) puxa pelo id")
+        void pullDepoisDeFechar() throws Exception {
+            impressao.acompanhamento = job -> roteiro(() -> br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.falhou(
+                    br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.CANCELADO, "cancelado na fila"));
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            c.send(json("tipo", "imprimir", "id", "e-3", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF"));
+            assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_ok");
+            c.close();
+            Thread.sleep(300);
+            ClienteTeste d = conectarEAutenticar(OUTRA_ORIGIN);
+            d.send(json("tipo", "consultar_impressao", "id", "e-3"));
+            JsonNode e = d.proximaMensagem();
+            assertThat(e.get("estado").asText()).isEqualTo("FALHOU");
+            assertThat(e.get("motivo").asText()).isEqualTo("CANCELADO");
+            assertThat(e.get("encerrado").asBoolean()).isTrue();
+            d.close();
+        }
+
+        @Test
+        @DisplayName("id nunca impresso → DESCONHECIDO{SEM_REGISTRO} encerrado; motor sem acompanhamento → NENHUM push e pull = DESCONHECIDO{SEM_SUPORTE}; consultar_impressao sem id → MENSAGEM_INVALIDA")
+        void semRegistroESemSuporte() throws Exception {
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            c.send(json("tipo", "consultar_impressao", "id", "nunca"));
+            JsonNode n = c.proximaMensagem();
+            assertThat(n.get("estado").asText()).isEqualTo("DESCONHECIDO");
+            assertThat(n.get("motivo").asText()).isEqualTo("SEM_REGISTRO");
+            assertThat(n.get("encerrado").asBoolean()).isTrue();
+
+            c.send(json("tipo", "imprimir", "id", "e-4", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF")); // fake sem acompanhamento
+            assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("imprimir_ok");
+            c.send(json("tipo", "consultar_impressao", "id", "e-4"));
+            JsonNode s = c.proximaMensagem();
+            assertThat(s.get("tipo").asText()).as("nenhum push no meio").isEqualTo("impressao_estado");
+            assertThat(s.get("motivo").asText()).isEqualTo("SEM_SUPORTE");
+
+            c.send(json("tipo", "consultar_impressao"));
+            assertThat(c.proximaMensagem().get("codigo").asText()).isEqualTo("MENSAGEM_INVALIDA");
+            c.close();
+        }
+
+        @Test
+        @DisplayName("pré-auth: consultar_impressao → erro NAO_AUTENTICADO + close 1008 (o gate vale para o tipo novo também)")
+        void preAuth() throws Exception {
+            ClienteTeste c = ClienteTeste.conectarAberto(servidor.getPort(), ORIGIN);
+            c.send(json("tipo", "consultar_impressao", "id", "x"));
+            assertThat(c.proximaMensagem().get("codigo").asText()).isEqualTo("NAO_AUTENTICADO");
+            assertThat(c.esperarFechar(5)).isTrue();
+        }
+
+        @Test
+        @DisplayName("conclusão TARDIA (o motor respondeu depois do prazo e o PWA já recebeu ERRO): o resultado atrasado vai para o observador — o pull diz que o cupom SAIU, fechando o buraco da reimpressão duplicada")
+        void conclusaoTardia() throws Exception {
+            impressao.acompanhamento = job -> roteiro(() -> br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.impresso("saiu atrasado"));
+            java.util.concurrent.CountDownLatch trinco = new java.util.concurrent.CountDownLatch(1);
+            impressao.trinco.set(trinco);
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            c.send(json("tipo", "imprimir", "id", "e-5", "formato", "pdf", "bytesBase64", base64(PDF), "impressora", "PDF"));
+            assertThat(c.proximaMensagem(6).get("tipo").asText()).isEqualTo("imprimir_erro"); // prazo de 1,5 s estourou
+            impressao.trinco.set(null);
+            trinco.countDown();
+            JsonNode tardio = c.proximaMensagem();
+            assertThat(tardio.get("tipo").asText()).isEqualTo("impressao_estado");
+            assertThat(tardio.get("id").asText()).isEqualTo("e-5");
+            assertThat(tardio.get("estado").asText()).isEqualTo("IMPRESSO");
+            c.close();
+        }
+    }
 
     @Nested
     @DisplayName("8/9. imprimir")
