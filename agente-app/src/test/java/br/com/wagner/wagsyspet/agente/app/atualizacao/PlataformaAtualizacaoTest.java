@@ -21,7 +21,7 @@ class PlataformaAtualizacaoTest {
 
     static final String NOME = "AgroEase-Agente-Impressao";
 
-    static final class Cmd implements ComandoExterno {
+    static class Cmd implements ComandoExterno {
         final List<List<String>> chamadas = new ArrayList<>();
         @Override public Saida executar(List<String> comando) { chamadas.add(List.copyOf(comando)); return new Saida(0, ""); }
     }
@@ -37,7 +37,7 @@ class PlataformaAtualizacaoTest {
     }
 
     @Test
-    @DisplayName("Relancadores: Linux com unit do systemd → systemctl --user start; sem unit → processo direto; macOS com plist → launchctl kickstart -k; Windows → direto")
+    @DisplayName("Relancadores: Linux com unit do systemd → systemctl --user start; sem unit → processo direto; macOS com plist → launchctl kickstart -k; Windows com tarefa → schtasks /run, sem → direto")
     void relancadores(@TempDir Path tmp) throws Exception {
         Cmd cmd = new Cmd();
         List<Path> diretos = new ArrayList<>();
@@ -62,8 +62,22 @@ class PlataformaAtualizacaoTest {
         Path plist = tmp.resolve("Library/LaunchAgents/br.com.agroease.agente.impressao.plist"); Files.createDirectories(plist.getParent()); Files.writeString(plist, "<plist/>");
         Relancadores.paraSo("Mac OS X", tmp, Map.of("UID", "501"), cmd, diretos::add).relancar(launcher);
         assertThat(cmd.chamadas.get(cmd.chamadas.size() - 1)).containsExactly("launchctl", "kickstart", "-k", "gui/501/br.com.agroease.agente.impressao");
-        // Windows
-        Relancadores.paraSo("Windows 11", tmp, Map.of(), cmd, diretos::add).relancar(launcher);
+        // Windows sem a tarefa keepalive (schtasks /query falha) → direto
+        Cmd semTarefa = new Cmd() {
+            @Override public Saida executar(List<String> comando) { chamadas.add(List.copyOf(comando)); return comando.get(0).equals("schtasks") ? new Saida(1, "ERROR: The system cannot find the file specified.") : new Saida(0, ""); }
+        };
+        Relancadores.paraSo("Windows 11", tmp, Map.of(), semTarefa, diretos::add).relancar(launcher);
+        assertThat(diretos).hasSize(2);
+        assertThat(semTarefa.chamadas).hasSize(1);
+        // Windows COM a tarefa keepalive (L3) → schtasks /run (instância rastreada pelo Agendador; um filho direto viraria 2ª JVM no minuto seguinte)
+        Cmd comTarefa = new Cmd() {
+            @Override public Saida executar(List<String> comando) { chamadas.add(List.copyOf(comando)); return comando.get(0).equals("schtasks") && comando.get(1).equals("/query") ? new Saida(0, "Status: Ready") : new Saida(0, ""); }
+        };
+        Relancadores.paraSo("Windows 11", tmp, Map.of(), comTarefa, diretos::add).relancar(launcher);
+        // pode estar pausada por um "Sair" e o Status é localizado: reabilita SEMPRE (idempotente) e roda
+        assertThat(comTarefa.chamadas).containsSequence(
+                List.of("schtasks", "/change", "/tn", "AgroEase-Agente-Impressao", "/enable"),
+                List.of("schtasks", "/run", "/tn", "AgroEase-Agente-Impressao"));
         assertThat(diretos).hasSize(2);
     }
 

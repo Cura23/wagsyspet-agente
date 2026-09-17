@@ -26,13 +26,27 @@ public interface ComandoExterno {
     static ComandoExterno real(Duration prazo) {
         return comando -> {
             Process p = new ProcessBuilder(comando).redirectErrorStream(true).start();
+            // drenar ENQUANTO espera: o pipe do filho tem 4 KB no Windows (64 KB no Linux); ler só depois do waitFor deixava quem escreve
+            // mais que isso (ex.: schtasks /query /xml) bloqueado até estourar o prazo (adversarial L3 r2)
+            java.util.concurrent.CompletableFuture<byte[]> saida = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try (java.io.InputStream in = p.getInputStream()) {
+                    return in.readAllBytes();
+                } catch (IOException e) {
+                    return new byte[0];
+                }
+            });
             try {
                 if (!p.waitFor(prazo.toMillis(), TimeUnit.MILLISECONDS)) {
                     p.destroyForcibly();
                     throw new IOException("comando não respondeu em " + prazo.toSeconds() + " s: " + comando);
                 }
-                String texto = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-                return new Saida(p.exitValue(), texto);
+                byte[] bytes;
+                try {
+                    bytes = saida.get(5, TimeUnit.SECONDS); // um neto pode segurar o pipe aberto depois de o filho sair
+                } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                    bytes = new byte[0];
+                }
+                return new Saida(p.exitValue(), new String(bytes, StandardCharsets.UTF_8).trim());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 p.destroyForcibly();

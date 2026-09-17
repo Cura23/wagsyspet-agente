@@ -15,13 +15,16 @@ import java.util.function.Consumer;
 
 /**
  * Relançar o agente DEPOIS da troca pelo SUPERVISOR que já o gerencia (plano F6 D2): um processo lançado direto pelo atualizador
- * ficaria órfão do supervisor (e no Windows a tarefa keepalive do L3 tentaria subir uma 2ª instância por minuto). Linux com unit do
- * systemd → {@code systemctl --user start}; macOS com LaunchAgent → {@code launchctl kickstart -k}; sem supervisor → processo direto.
+ * ficaria órfão do supervisor (e no Windows a tarefa keepalive tentaria subir uma 2ª instância por minuto). Linux com unit do
+ * systemd → {@code systemctl --user start}; macOS com LaunchAgent → {@code launchctl kickstart -k}; Windows com a tarefa do Agendador
+ * → {@code schtasks /run} (reabilitando-a se o lojista tinha clicado "Sair"); sem supervisor → processo direto.
  */
 public final class Relancadores {
 
     private static final Logger log = LoggerFactory.getLogger(Relancadores.class);
     static final String UNIT_SYSTEMD = "agroease-agente-impressao.service";
+    /** = {@code AutostartWindows.TAREFA} (pacote diferente; o teste de contrato cruza os dois). */
+    static final String TAREFA_WINDOWS = "AgroEase-Agente-Impressao";
 
     private Relancadores() {
     }
@@ -45,6 +48,14 @@ public final class Relancadores {
                     } catch (IOException e) {
                         log.warn("systemd-run indisponível ({}); relançando direto", e.getMessage());
                     }
+                }
+            } else if (Plataforma.windows(osName)) {
+                ComandoExterno.Saida q = cmd.executar(List.of("schtasks", "/query", "/tn", TAREFA_WINDOWS));
+                if (q.ok()) {
+                    // pode estar pausada por um "Sair" (o texto do Status é localizado, então não se lê: /enable é idempotente)
+                    executar(cmd, List.of("schtasks", "/change", "/tn", TAREFA_WINDOWS, "/enable"), "Agendador (reabilitar)");
+                    executar(cmd, List.of("schtasks", "/run", "/tn", TAREFA_WINDOWS), "Agendador");
+                    return;
                 }
             } else if (Plataforma.mac(osName)) {
                 Path plist = home.resolve("Library").resolve("LaunchAgents").resolve(Autostart.ID + ".plist");

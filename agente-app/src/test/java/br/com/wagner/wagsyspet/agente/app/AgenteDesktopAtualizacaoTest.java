@@ -73,6 +73,7 @@ class AgenteDesktopAtualizacaoTest {
     private byte[] json, sig;
     private final byte[] instalador = "instalador-falso-".repeat(50).getBytes(StandardCharsets.UTF_8);
     private final AtomicReference<Path> planoLancado = new AtomicReference<>();
+    private volatile boolean falharLancador;
     private final AtomicReference<EstadoAtualizacao.EmAplicacao> revertido = new AtomicReference<>();
 
     @BeforeEach
@@ -101,7 +102,7 @@ class AgenteDesktopAtualizacaoTest {
         ClienteRelease cliente = new ClienteRelease(URI.create(base + "/latest.json"), Duration.ofSeconds(5), versao);
         VerificadorAtualizacao verificador = VerificadorAtualizacao.destaMaquina(chaves, versao, ManifestoRelease.FormatoInstalado.INSTALADOR);
         GerenteAtualizacao gerente = new GerenteAtualizacao(dirs, new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json")), cliente, verificador, Clock.systemUTC(), ociosidadeMinima);
-        return new AgenteDesktop.Atualizacao(gerente, plano -> planoLancado.set(plano), ap -> { revertido.set(ap); return true; },
+        return new AgenteDesktop.Atualizacao(gerente, plano -> { if (falharLancador) { throw new java.io.UncheckedIOException(new java.io.IOException("sem atualizador")); } planoLancado.set(plano); } /* a fiação REAL do Windows (ProcessBuilder no lambda "direto") lança UncheckedIOException — adversarial L3 r2 */, ap -> { revertido.set(ap); return true; },
                 Duration.ofMillis(200), Duration.ofHours(1), Duration.ofMillis(100), Duration.ofMillis(300));
     }
 
@@ -181,12 +182,57 @@ class AgenteDesktopAtualizacaoTest {
         while (d.atualizacaoDisponivel().isEmpty() && System.nanoTime() < limite) { Thread.sleep(50); }
         assertThat(d.atualizacaoDisponivel()).contains("9.9.9");
 
+        java.util.concurrent.atomic.AtomicInteger pausas = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger retomadas = new java.util.concurrent.atomic.AtomicInteger();
+        d.supervisor(pausas::incrementAndGet, retomadas::incrementAndGet);
         d.atualizarAgora();
         assertThat(c.fechou.await(5, TimeUnit.SECONDS)).isTrue();
         assertThat(c.codigoFechamento).isEqualTo(1001);
         assertThat(c.motivoFechamento).isEqualTo("ATUALIZANDO");
         assertThat(codigo.get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
         assertThat(planoLancado.get()).isNotNull();
+        assertThat(pausas.get()).as("saída para ATUALIZAR pausa o keepalive ANTES de sair: senão o tick de 1 min reabre o agente velho no meio do msiexec (adversarial L3); quem reabilita e relança é o atualizador").isEqualTo(1);
+        assertThat(retomadas.get()).isZero();
+    }
+
+    @Test
+    @DisplayName("lançador do atualizador FALHA → o agente continua no ar e o keepalive pausado para atualizar é RETOMADO (senão ficaria sem supervisor até o próximo login)")
+    void lancadorFalhaRetomaKeepalive(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        parear(dirs);
+        falharLancador = true;
+        AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
+                Optional.of(atualizacao(dirs, "1.0.0-teste", Duration.ofHours(1))));
+        java.util.concurrent.atomic.AtomicInteger pausas = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger retomadas = new java.util.concurrent.atomic.AtomicInteger();
+        d.supervisor(pausas::incrementAndGet, retomadas::incrementAndGet);
+        CompletableFuture<Integer> codigo = executar(d);
+        long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (d.atualizacaoDisponivel().isEmpty() && System.nanoTime() < limite) { Thread.sleep(50); }
+        d.atualizarAgora();
+        limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (retomadas.get() == 0 && System.nanoTime() < limite) { Thread.sleep(50); }
+        assertThat(pausas.get()).isEqualTo(1);
+        assertThat(retomadas.get()).isEqualTo(1);
+        assertThat(codigo.isDone()).as("segue servindo na versão atual").isFalse();
+        d.sair();
+        codigo.get(10, TimeUnit.SECONDS);
+    }
+
+    @Test
+    @DisplayName("'Sair' pela interface → saída 0 E o gancho de saída definitiva roda (Windows: schtasks /change /disable — senão o keepalive reabre o agente em 1 min)")
+    void sairPausaKeepalive(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        parear(dirs);
+        AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE);
+        java.util.concurrent.atomic.AtomicInteger pausas = new java.util.concurrent.atomic.AtomicInteger();
+        d.supervisor(pausas::incrementAndGet, () -> { });
+        CompletableFuture<Integer> codigo = executar(d);
+        long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (d.porta() == null && System.nanoTime() < limite) { Thread.sleep(50); }
+        d.sair();
+        assertThat(codigo.get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
+        assertThat(pausas.get()).isEqualTo(1);
     }
 
     @Test
@@ -231,5 +277,67 @@ class AgenteDesktopAtualizacaoTest {
         @Override public void onClose(int c, String r, boolean remote) { codigoFechamento = c; motivoFechamento = r == null ? "" : r; fechou.countDown(); }
         @Override public void onError(Exception e) { }
         JsonNode proxima() throws Exception { String m = recebidas.poll(5, TimeUnit.SECONDS); assertThat(m).isNotNull(); return JSON.readTree(m); }
+    }
+
+    /** Interface falsa: só registra o erro fatal (o diálogo real é síncrono). */
+    private static final class UiFalsa implements br.com.wagner.wagsyspet.agente.app.ui.Superficie {
+        final java.util.List<String> fatais = new java.util.concurrent.CopyOnWriteArrayList<>();
+        @Override public void estado(String titulo, String detalhe, boolean pareado) { }
+        @Override public void aviso(String titulo, String mensagem) { }
+        @Override public void erro(String titulo, String mensagem) { }
+        @Override public void erroFatal(String titulo, String mensagem) { fatais.add(mensagem); }
+    }
+
+    @Test
+    @DisplayName("erro fatal visto pela pessoa pausa o keepalive — MENOS sob a sentinela: com a troca pendente o supervisor TEM de dar o 2º boot, que é o que leva ao REVERTER (pausar ali desligaria o rollback automático do Windows — adversarial L3 r2)")
+    void erroFatalSobSentinelaNaoPausa(@TempDir Path tmp) throws Exception {
+        try (java.net.ServerSocket ocupante = new java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            int porta = ocupante.getLocalPort();
+            // (1) sem troca pendente: erro fatal visto → pausa
+            DiretoriosDoAgente normal = new DiretoriosDoAgente(tmp.resolve("normal"));
+            parear(normal);
+            AgenteDesktop a = new AgenteDesktop(normal, "9.9.9", new int[]{porta}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
+                    Optional.of(atualizacao(normal, "9.9.9", Duration.ofHours(1))));
+            UiFalsa uiA = new UiFalsa(); a.ui(uiA);
+            java.util.concurrent.atomic.AtomicInteger pausasA = new java.util.concurrent.atomic.AtomicInteger();
+            a.supervisor(pausasA::incrementAndGet, () -> { });
+            a.executar();
+            assertThat(uiA.fatais).hasSize(1);
+            assertThat(pausasA.get()).isEqualTo(1);
+
+            // (2) 1º boot da versão nova (emAplicacao pendente) que não consegue subir: NÃO pausa
+            DiretoriosDoAgente sentinela = new DiretoriosDoAgente(tmp.resolve("sentinela"));
+            parear(sentinela);
+            new EstadoAtualizacao(sentinela.atualizacao().resolve("estado.json")).gravar(EstadoAtualizacao.Estado.VAZIO
+                    .comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 0));
+            AgenteDesktop b = new AgenteDesktop(sentinela, "9.9.9", new int[]{porta}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
+                    Optional.of(atualizacao(sentinela, "9.9.9", Duration.ofHours(1))));
+            UiFalsa uiB = new UiFalsa(); b.ui(uiB);
+            java.util.concurrent.atomic.AtomicInteger pausasB = new java.util.concurrent.atomic.AtomicInteger();
+            b.supervisor(pausasB::incrementAndGet, () -> { });
+            b.executar();
+            assertThat(pausasB.get()).as("sob sentinela o keepalive fica ligado para dar o 2º boot").isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("reversão ADIADA (Windows: quem instala a anterior é o atualizador de fora): a sentinela NÃO marca 'revertida' nem limpa o emAplicacao — quem fecha o estado é o atualizador, com o resultado REAL do MSI (adversarial L3 r2); sai 5")
+    void reversaoAdiadaNaoMarcaRevertida(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        parear(dirs);
+        EstadoAtualizacao estado = new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json"));
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 1));
+        AgenteDesktop.Atualizacao base = atualizacao(dirs, "9.9.9", Duration.ofHours(1));
+        br.com.wagner.wagsyspet.agente.core.atualizacao.Reversor adiado = new br.com.wagner.wagsyspet.agente.core.atualizacao.Reversor() {
+            @Override public boolean reverter(EstadoAtualizacao.EmAplicacao ap) { revertido.set(ap); return true; }
+            @Override public boolean adiada() { return true; }
+        };
+        AgenteDesktop d = new AgenteDesktop(dirs, "9.9.9", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
+                Optional.of(new AgenteDesktop.Atualizacao(base.gerente(), base.lancador(), adiado, base.verificacaoInicial(), base.intervaloVerificacao(), base.intervaloTentativa(), base.prazoSaude())));
+        assertThat(d.executar()).isEqualTo(AgenteDesktop.SAIDA_REVERTIDA);
+        assertThat(revertido.get()).isNotNull();
+        EstadoAtualizacao.Estado e = estado.ler();
+        assertThat(e.emAplicacao()).as("o atualizador precisa dele para reconhecer o plano invertido e fechar o estado").isPresent();
+        assertThat(e.recusada()).as("ainda não reverteu de verdade").isEmpty();
     }
 }

@@ -168,9 +168,9 @@ jobs:
               ls -la "$IMPRESSAO_SAIDA"
             fi
           fi
-          # F3-L5: "iniciar com o sistema" pelo binário — instala, confere, desinstala (idempotente) no mecanismo de cada SO
-          # (Run do Windows / LaunchAgent / systemd --user + .desktop). Pasta de dados isolada; no Linux o XDG_CONFIG_HOME
-          # também, para não tocar o ~/.config do runner. Sem sessão gráfica, launchctl/systemctl podem falhar: só avisam.
+          # F3-L5 (+F6-L3 no Windows): "iniciar com o sistema" pelo binário — instala, confere, desinstala (idempotente) no mecanismo
+          # de cada SO (tarefa keepalive do Agendador no Windows / LaunchAgent / systemd --user + .desktop). Pasta de dados isolada;
+          # no Linux o XDG_CONFIG_HOME também, para não tocar o ~/.config do runner. Sem sessão gráfica, launchctl/systemctl podem falhar: só avisam.
           echo "== autostart (--instalar / --status / --desinstalar)"
           DADOS_CI="$RUNNER_TEMP/agente-ci-dados"; export XDG_CONFIG_HOME="$RUNNER_TEMP/agente-ci-xdg"; mkdir -p "$XDG_CONFIG_HOME"
           "$BIN" --instalar --dir-dados "$DADOS_CI"
@@ -179,11 +179,33 @@ jobs:
           case "$RUNNER_OS" in
             Linux)   test -f "$XDG_CONFIG_HOME/autostart/agroease-agente-impressao.desktop" ;;
             macOS)   test -f "$HOME/Library/LaunchAgents/br.com.agroease.agente.impressao.plist" ;;
-            Windows) MSYS_NO_PATHCONV=1 reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run' /v AgroEaseAgenteImpressao ;;  # sem isso o Git Bash troca /v por um caminho
+            Windows) # F6-L3: o Agendador ACEITOU o XML (dois gatilhos: logon + repetição de 1 min ancorada no relógio, IgnoreNew, sem limite,
+                     # usuário pelo SID, ação com --keepalive) e o Run NÃO existe junto (senão 2 subidas no logon)
+                     MSYS_NO_PATHCONV=1 schtasks /query /tn AgroEase-Agente-Impressao /xml > "$RUNNER_TEMP/tarefa.xml"   # sem isso o Git Bash troca /tn por um caminho
+                     python3 -c "import sys;b=open(sys.argv[1],'rb').read();print(b.decode('utf-16') if b[:2] in (b'\xff\xfe',b'\xfe\xff') else b.decode('utf-8','replace').replace(chr(0),''))" "$RUNNER_TEMP/tarefa.xml" > "$RUNNER_TEMP/tarefa8.xml"
+                     for trecho in "<LogonTrigger>" "<TimeTrigger>" "<Interval>PT1M</Interval>" "<MultipleInstancesPolicy>IgnoreNew" "<ExecutionTimeLimit>PT0S" "<LogonType>InteractiveToken" "AgroEase-Agente-Impressao.exe" "<Arguments>--keepalive</Arguments>" "<UserId>S-1-5-"; do
+                       grep -qF -- "$trecho" "$RUNNER_TEMP/tarefa8.xml" || { echo "XML da tarefa sem: $trecho"; cat "$RUNNER_TEMP/tarefa8.xml"; exit 1; }
+                     done
+                     if MSYS_NO_PATHCONV=1 reg query 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run' /v AgroEaseAgenteImpressao >/dev/null 2>&1; then echo "Run NÃO deveria existir junto com a tarefa"; exit 1; fi
+                     # o agente lê habilitada/pausada do <Settings><Enabled> do /query /xml REAL (o texto do Status é localizado)
+                     # a tarefa recém-criada pode já ter subido um agente (repetição de 1 min), e o agente REABILITA a tarefa no boot
+                     # (retomarKeepalive): desabilitar, matar quem estiver subindo e desabilitar de novo deixa o estado estável para a leitura
+                     MSYS_NO_PATHCONV=1 schtasks /change /tn AgroEase-Agente-Impressao /disable >/dev/null
+                     MSYS_NO_PATHCONV=1 taskkill /F /IM AgroEase-Agente-Impressao.exe >/dev/null 2>&1 || true; sleep 3
+                     MSYS_NO_PATHCONV=1 schtasks /change /tn AgroEase-Agente-Impressao /disable >/dev/null
+                     "$BIN" --status --dir-dados "$DADOS_CI" | tee /tmp/status-pausado.txt
+                     grep -q "pausada" /tmp/status-pausado.txt || { echo "agente não enxergou a tarefa desabilitada"; exit 1; }
+                     MSYS_NO_PATHCONV=1 schtasks /change /tn AgroEase-Agente-Impressao /enable >/dev/null
+                     "$BIN" --status --dir-dados "$DADOS_CI" | grep -q "pausada" && { echo "agente ainda vê pausada depois do /enable"; exit 1; } || true ;;
           esac
           "$BIN" --instalar --dir-dados "$DADOS_CI" >/dev/null   # idempotente
           "$BIN" --desinstalar --dir-dados "$DADOS_CI"
           "$BIN" --status --dir-dados "$DADOS_CI" | grep -q "Iniciar com o sistema: desativado" || { echo "autostart não foi removido"; exit 1; }
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            if MSYS_NO_PATHCONV=1 schtasks /query /tn AgroEase-Agente-Impressao >/dev/null 2>&1; then echo "tarefa não foi removida"; exit 1; fi
+            # a repetição de 1 min pode ter disparado enquanto a tarefa existiu: não deixar um agente de GUI vivo segurando a pasta do dist
+            MSYS_NO_PATHCONV=1 taskkill /F /IM AgroEase-Agente-Impressao.exe >/dev/null 2>&1 || true
+          fi
           "$BIN" --desinstalar --dir-dados "$DADOS_CI" >/dev/null  # idempotente
           unset XDG_CONFIG_HOME
           # exatamente UM binding de log no binário (slf4j-jdk14 → arquivo); um 2º (slf4j-simple) mandaria o log para o lugar errado
@@ -253,7 +275,7 @@ jobs:
       - name: Self-update real (release falsa 9.9.9 assinada, servidor loopback)
         if: always() && steps.empacotar.outcome == 'success'
         shell: bash
-        timeout-minutes: 25
+        timeout-minutes: 40
         run: |
           set -euo pipefail
           DIST=agente-app/target/dist; NOME=AgroEase-Agente-Impressao
@@ -289,7 +311,18 @@ jobs:
           (cd "$SMK/art" && python3 -m http.server 8770 --bind 127.0.0.1 >/dev/null 2>&1 &)
           for i in $(seq 1 30); do curl -sf --max-time 3 http://127.0.0.1:8770/latest.json >/dev/null 2>&1 && break; sleep 1; done
           curl -sf --max-time 5 http://127.0.0.1:8770/latest.json | head -c 200; echo
-          echo "== 4) --atualizar pelo binário INSTALADO (sem tela: o agente relançado só orienta e sai)"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            V=$(./mvnw -q -B -ntp $REVISAO_ARG help:evaluate -Dexpression=revision -DforceStdout)
+            echo "== 3b) Windows (F6-L3): a versão ATUAL também publicada como release v$V — o GuardaAnterior baixa o .exe dela para o rollback"
+            mkdir -p "$SMK/art/v$V"; cp "$EXE" "$SMK/art/v$V/$NOME-$V-windows-x64.exe"
+            (cd "$SMK/art/v$V" && bash "$GITHUB_WORKSPACE/scripts/release/montar-latest.sh" "$V" . Cura23/wagsyspet-agente "$SMK/priv.pem" 1 >/dev/null)
+            python3 - "$SMK/art/v$V/latest.json" "$V" <<'PY'
+          import sys; p=sys.argv[1]; v=sys.argv[2]; s=open(p).read().replace("https://github.com/Cura23/wagsyspet-agente/releases/download/v"+v+"/","http://127.0.0.1:8770/v"+v+"/"); open(p,"w").write(s)
+          PY
+            openssl pkeyutl -sign -inkey "$SMK/priv.pem" -rawin -in "$SMK/art/v$V/latest.json" -out "$SMK/art/v$V/latest.json.sig"
+            curl -sf --max-time 5 "http://127.0.0.1:8770/v$V/latest.json" | head -c 120; echo
+          fi
+          echo "== 4) --atualizar pelo binário INSTALADO (o agente relançado herda este ambiente; em Linux/macOS sem tela ele só orienta e sai, no Windows fica aberto até a limpeza)"
           export AGROEASE_AGENTE_DIR="$SMK_JVM/dados"
           export JAVA_TOOL_OPTIONS="-Duser.home=$SMK_JVM/home -Dagente.release.manifesto.url=http://127.0.0.1:8770/latest.json -Dagente.release.chave.publica=$PUB"
           unset DISPLAY WAYLAND_DISPLAY || true
@@ -311,12 +344,90 @@ jobs:
           case "$RUNNER_OS" in
             Linux) "$SMK/dados/atualizacao/anterior/$NOME/bin/$NOME-cli" --versao | grep -qF "AgroEase $(./mvnw -q -B -ntp $REVISAO_ARG help:evaluate -Dexpression=revision -DforceStdout) " && echo "anterior guardado OK" ;;
             macOS) ls "$SMK/dados/atualizacao/anterior/$NOME.app/Contents/MacOS/$NOME-cli" && echo "anterior guardado OK" ;;
-            Windows) echo "(Windows: sem instalador anterior guardado nesta build — rollback via download da release anterior, quando existir)" ;;
+            Windows) ANT="$SMK/dados/atualizacao/anterior/$NOME-$V-windows-x64.exe"; ls -la "$SMK/dados/atualizacao/anterior/"
+                     test -f "$ANT" || { echo "GuardaAnterior não guardou o instalador da versão atual"; exit 1; }
+                     [ "$(sha256sum < "$ANT" | cut -d' ' -f1)" = "$(sha256sum < "$EXE" | cut -d' ' -f1)" ] && echo "anterior guardado OK (sha igual ao .exe instalado)"
+                     grep -q "Agente novo relançado" "$SMK/dados/atualizacao/atualizador.log" || { echo "atualizador não relançou o agente"; exit 1; }
+                     echo "== 6b) Windows (F6-L3): REVERSÃO real — a 9.9.9 não confirma saúde (não pareada) → no 2º boot a sentinela entrega a volta ao atualizador de fora, que reinstala o $V pelo MSI guardado (downgrade) — o MSI nunca roda de dentro do agente instalado"
+                     matar_agente() { MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME.exe" >/dev/null 2>&1 || true; MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME-cli.exe" >/dev/null 2>&1 || true; sleep 2; }
+                     matar_agente   # o agente 9.9.9 relançado (1º boot, fica aberto sem confirmar) segura o lock e a pasta instalada
+                     export JAVA_TOOL_OPTIONS="-Duser.home=$SMK_JVM/home -Dagente.release.manifesto.url=http://127.0.0.1:8770/latest.json -Dagente.release.chave.publica=$PUB"
+                     : > "$SMK/dados/atualizacao/atualizador.log"
+                     REVERTEU=0
+                     for boot in 1 2 3; do
+                       echo "--- boot $boot da 9.9.9"; cat "$SMK/dados/atualizacao/estado.json" || true
+                       set +e; timeout 90 "$CLI" --sem-bandeja; COD=$?; set -e
+                       echo "saída do agente: $COD"
+                       if [ "$COD" = "5" ]; then REVERTEU=1; break; fi
+                       matar_agente
+                     done
+                     [ "$REVERTEU" = "1" ] || { echo "a sentinela não mandou reverter (esperado: saída 5)"; cat "$SMK"/dados/logs/*.log 2>/dev/null | tail -40 || true; exit 1; }
+                     for i in $(seq 1 150); do grep -qE 'relançado|Falha|cancelada|ilegível' "$SMK/dados/atualizacao/atualizador.log" 2>/dev/null && break; sleep 2; done
+                     echo "--- atualizador.log (reversão)"; cat "$SMK/dados/atualizacao/atualizador.log"
+                     grep -q "Instalado:" "$SMK/dados/atualizacao/atualizador.log" || { echo "a reversão pelo MSI anterior não concluiu"; ls "$SMK/dados/logs" || true; exit 1; }
+                     matar_agente   # o agente $V relançado
+                     unset JAVA_TOOL_OPTIONS
+                     VOLTA=$("$CLI" --versao 2>&1); echo "$VOLTA"
+                     grep -qF "AgroEase $V " <<<"$VOLTA " || { echo "instalado NÃO voltou para $V"; exit 1; }
+                     echo "--- estado.json depois da reversão"; cat "$SMK/dados/atualizacao/estado.json"
+                     grep -q '"recusada"' "$SMK/dados/atualizacao/estado.json" || { echo "a 9.9.9 deveria ficar recusada por 24 h"; exit 1; }
+                     echo "reversão real OK (9.9.9 → $V)" ;;
           esac
           echo "== 7) limpeza: encerrar o agente relançado (se ficou vivo) e o servidor"
+          if [ "$RUNNER_OS" = "Windows" ]; then MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME.exe" >/dev/null 2>&1 || true; MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME-cli.exe" >/dev/null 2>&1 || true; fi
           pkill -f "$NOME" || true; pkill -f "http.server 8770" || true
           unset AGROEASE_AGENTE_DIR
           echo "self-update real OK neste SO"
+
+      - name: Keepalive real (Windows — tarefa do Agendador relança o agente morto em ≤ 1 min; 2ª instância --keepalive sai muda)
+        if: always() && runner.os == 'Windows' && steps.empacotar.outcome == 'success'
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          NOME=AgroEase-Agente-Impressao; INST="$LOCALAPPDATA/$NOME"; CLI="$INST/$NOME-cli.exe"
+          test -f "$CLI" || { echo "agente não está instalado (o passo de self-update falhou antes?)"; exit 1; }
+          # CSV: o formato de tabela do tasklist corta o nome da imagem em 25 caracteres (some o ".exe"); saída numa variável: com pipefail,
+          # um "grep -q" que fecha o pipe cedo faria o tasklist falhar por SIGPIPE
+          vivo() { local t; t=$(MSYS_NO_PATHCONV=1 tasklist /FI "IMAGENAME eq $NOME.exe" /FO CSV /NH 2>/dev/null || true); grep -qi "$NOME.exe" <<<"$t"; }
+          esperar_vivo() { for i in $(seq 1 60); do vivo && return 0; sleep 2; done; return 1; }
+          limpar() { "$CLI" --desinstalar >/dev/null 2>&1 || true; MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME.exe" >/dev/null 2>&1 || true; }
+          trap limpar EXIT
+          MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME.exe" >/dev/null 2>&1 || true
+          # a tarefa roda com InteractiveToken: só dispara se o usuário do runner tem sessão interativa (desktop)
+          DESKTOP=$(MSYS_NO_PATHCONV=1 tasklist /FI "IMAGENAME eq explorer.exe" /FO CSV /NH 2>/dev/null || true)
+          if ! grep -qi "explorer.exe" <<<"$DESKTOP"; then
+            echo "::warning::runner sem sessão interativa (sem explorer.exe): o keepalive real não pôde ser provado neste CI"
+            MSYS_NO_PATHCONV=1 query user || true
+            exit 0
+          fi
+          "$CLI" --instalar
+          echo "== 1) a repetição de 1 min (ancorada no relógio) sobe o agente SEM logon — é o caso da sessão do pareamento"
+          esperar_vivo || { echo "a tarefa não subiu o agente em 120 s"; MSYS_NO_PATHCONV=1 schtasks /query /tn "$NOME" /v /fo LIST || true; exit 1; }
+          sleep 15   # boot completo do agente (trava de instância tomada, retomarKeepalive já rodou) antes de disputar a trava ou mexer na tarefa
+          echo "== 2) 2ª instância vinda do Agendador (--keepalive) com o agente aberto: sai 0 e MUDA"
+          # timeout + --sem-bandeja: se (por corrida) o CLI ganhasse a trava, viraria o agente e penduraria o passo; assim ele orienta e sai
+          SAIDA=$(timeout 60 "$CLI" --keepalive --sem-bandeja 2>&1) || { echo "2ª instância --keepalive não saiu 0: [$SAIDA]"; exit 1; }
+          echo "[$SAIDA]"
+          [ -z "$SAIDA" ] || { echo "a 2ª instância do keepalive deveria sair muda"; exit 1; }
+          echo "== 3) agente morto → de volta em ≤ 1 min (KEEPALIVE)"
+          pids() { local t; t=$(MSYS_NO_PATHCONV=1 tasklist /FI "IMAGENAME eq $NOME.exe" /FO CSV /NH 2>/dev/null || true); grep -i "$NOME.exe" <<<"$t" | tr -d '"' | cut -d, -f2 || true; }
+          pid_vivo() { local t; t=$(MSYS_NO_PATHCONV=1 tasklist /FI "PID eq $1" /FO CSV /NH 2>/dev/null || true); grep -q "\"$1\"" <<<"$t"; }
+          ANTES=$(pids); echo "PIDs do agente: $ANTES"
+          # o launcher do jpackage são DOIS processos com o mesmo nome: matar um derruba o outro e o taskkill devolve != 0 — não é falha
+          MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME.exe" >/dev/null 2>&1 || true; sleep 3
+          for p in $ANTES; do pid_vivo "$p" && { echo "PID $p não morreu"; exit 1; } || true; done   # por PID: o relançado (se o minuto virou) tem outro
+          esperar_vivo || { echo "keepalive NÃO relançou o agente em 120 s"; MSYS_NO_PATHCONV=1 schtasks /query /tn "$NOME" /v /fo LIST || true; exit 1; }
+          echo "relançado: $(pids | tr '\n' ' ')"
+          echo "== 4) tarefa desabilitada (o que o 'Sair' faz) → agente morto NÃO volta"
+          sleep 15   # o agente recém-relançado roda retomarKeepalive() (/enable) no boot: desabilitar só depois
+          MSYS_NO_PATHCONV=1 schtasks /change /tn "$NOME" /disable >/dev/null
+          MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME.exe" >/dev/null 2>&1 || true; sleep 3
+          "$CLI" --status | tee "$RUNNER_TEMP/ka-status.txt"
+          grep -q "pausada" "$RUNNER_TEMP/ka-status.txt" || { echo "a tarefa foi reabilitada por um agente em boot (corrida do teste)"; exit 1; }
+          sleep 75
+          vivo && { echo "o agente voltou com a tarefa desabilitada"; exit 1; } || true
+          echo "keepalive real OK"
 
       - name: Evidência — instalador gerado pelo jpackage
         if: always() && steps.empacotar.outcome == 'success'

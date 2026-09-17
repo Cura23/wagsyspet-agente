@@ -2,9 +2,8 @@ package br.com.wagner.wagsyspet.agente.app.atualizacao;
 
 import br.com.wagner.wagsyspet.agente.app.AplicadorAtualizacao;
 import br.com.wagner.wagsyspet.agente.app.autostart.ComandoExterno;
-import br.com.wagner.wagsyspet.agente.core.atualizacao.EstadoAtualizacao;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.GuardaAnterior;
 import br.com.wagner.wagsyspet.agente.core.atualizacao.PlanoAtualizacao;
-import br.com.wagner.wagsyspet.agente.core.atualizacao.Reversor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,16 +13,16 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.LongConsumer;
-import java.util.stream.Stream;
 
 /**
  * Windows (plano F6 D1): o {@code .exe} do jpackage é um MSI embrulhado cujo wrapper repassa os argumentos ao {@code msiexec}; com o
  * {@code --win-upgrade-uuid} fixo e versão maior é um major upgrade in-place, per-user, sem UAC. Sucesso = 0, 3010 (reboot pendente,
  * ignorado com {@code /norestart}) ou 1641. 1618 = outra instalação em curso → espera e tenta de novo. Outro código → reinstala o
- * instalador ANTERIOR guardado (downgrade permitido pelo jpackage), porque o {@code RemoveExistingProducts} fica fora da transação e
- * uma falha no meio deixa a loja sem agente.
+ * instalador ANTERIOR guardado e conferido pelo {@link GuardaAnterior} (downgrade permitido pelo jpackage), porque o
+ * {@code RemoveExistingProducts} fica fora da transação e uma falha no meio deixa a loja sem agente.
+ * <p>Roda SEMPRE no atualizador de fora, nunca no agente instalado: a reversão pela sentinela de boot é o {@link ReversorMsiDeFora}.
  */
-public final class InstaladorMsi implements AplicadorAtualizacao.Instalador, Reversor {
+public final class InstaladorMsi implements AplicadorAtualizacao.Instalador {
 
     private static final Logger log = LoggerFactory.getLogger(InstaladorMsi.class);
     static final int TENTATIVAS_1618 = 5;
@@ -49,23 +48,14 @@ public final class InstaladorMsi implements AplicadorAtualizacao.Instalador, Rev
         if (SUCESSO.contains(codigo)) {
             return new Resultado(true, "msiexec " + codigo + " (upgrade in-place)", plano.launcherAtual().map(Path::of));
         }
-        Optional<Path> anterior = instaladorAnterior();
+        // só o instalador CONFERIDO da versão anterior do plano (versao.txt + sha): um .exe de outra versão esquecido na pasta viraria
+        // um downgrade errado com mensagem de "anterior reinstalado" (adversarial L3)
+        Optional<Path> anterior = GuardaAnterior.guardado(pastaAnterior, plano.versaoAnterior());
         if (anterior.isPresent()) {
             int volta = instalar(anterior.get(), "msi-reinstalar-" + plano.versaoAnterior() + ".log");
             return new Resultado(false, "msiexec " + codigo + " ao instalar " + plano.versaoNova() + "; anterior reinstalado (msiexec " + volta + ")", Optional.empty());
         }
         return new Resultado(false, "msiexec " + codigo + " ao instalar " + plano.versaoNova() + " (sem instalador anterior guardado)", Optional.empty());
-    }
-
-    @Override
-    public boolean reverter(EstadoAtualizacao.EmAplicacao ap) {
-        Optional<Path> anterior = instaladorAnterior();
-        if (anterior.isEmpty()) {
-            log.warn("Sem instalador anterior guardado em {}; não há como reverter {}", pastaAnterior, ap.versaoNova());
-            return false;
-        }
-        int codigo = instalar(anterior.get(), "msi-reverter-" + ap.versaoAnterior() + ".log");
-        return SUCESSO.contains(codigo);
     }
 
     private int instalar(Path exe, String nomeLog) {
@@ -93,14 +83,4 @@ public final class InstaladorMsi implements AplicadorAtualizacao.Instalador, Rev
         return 1618;
     }
 
-    private Optional<Path> instaladorAnterior() {
-        if (!Files.isDirectory(pastaAnterior)) {
-            return Optional.empty();
-        }
-        try (Stream<Path> s = Files.list(pastaAnterior)) {
-            return s.filter(p -> p.getFileName().toString().endsWith(".exe")).findFirst();
-        } catch (IOException e) {
-            return Optional.empty();
-        }
-    }
 }

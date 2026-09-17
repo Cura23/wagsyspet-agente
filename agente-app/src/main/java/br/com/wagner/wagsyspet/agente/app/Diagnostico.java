@@ -85,7 +85,7 @@ final class Diagnostico {
             portas.append(porta).append(portaLivre(porta) ? " livre" : " OCUPADA").append("  ");
         }
         out.println("INFO  portas 127.0.0.1: " + portas.toString().trim());
-        out.println("INFO  iniciar com o sistema: " + ComandosAutostart.padrao(out, out).linhaStatus());
+        out.println("INFO  iniciar com o sistema: " + ComandosAutostart.padrao(dirs, out, out).linhaStatus());
         out.println("INFO  relógio × servidor: " + relogioContraServidor());
 
         out.println(ok ? "DIAGNÓSTICO OK" : "DIAGNÓSTICO COM FALHAS");

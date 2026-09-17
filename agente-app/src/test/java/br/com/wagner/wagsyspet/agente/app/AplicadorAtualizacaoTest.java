@@ -52,6 +52,22 @@ class AplicadorAtualizacaoTest {
         assertThat(estado.ler().emAplicacao()).as("quem confirma é o agente novo, pela saúde").isPresent();
     }
 
+
+    @Test
+    @DisplayName("antes de instalar o atualizador PAUSA o supervisor (Windows: tarefa keepalive) — cobre o --atualizar do CLI, onde não há agente para pausar; a pausa falhando não impede a instalação")
+    void pausaSupervisorAntesDeInstalar(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        PlanoAtualizacao p = plano(tmp);
+        Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
+        p.gravar(arquivoPlano);
+        List<String> ordem = new ArrayList<>();
+        AplicadorAtualizacao a = new AplicadorAtualizacao(new PrintStream(new ByteArrayOutputStream()),
+                plano -> { ordem.add("instalar"); return new AplicadorAtualizacao.Instalador.Resultado(true, "ok", Optional.empty()); },
+                launcher -> ordem.add("relancar"), Duration.ofSeconds(2),
+                plano -> { ordem.add("pausar:" + plano.versaoNova()); throw new IllegalStateException("schtasks negado"); });
+        assertThat(a.aplicar(arquivoPlano)).isZero();
+        assertThat(ordem).containsExactly("pausar:9.9.9", "instalar", "relancar");
+    }
     @Test
     @DisplayName("instalador FALHOU → estado recusada (24 h) sem emAplicacao, relança o launcher ANTERIOR, saída 2")
     void falha(@TempDir Path tmp) throws Exception {
@@ -92,5 +108,57 @@ class AplicadorAtualizacaoTest {
             assertThat(relancados).isEmpty();
         }
         assertThat(estado.ler().emAplicacao()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("atualizador DESISTE sem instalar (agente não soltou a trava; plano ilegível) → DESFAZ a pausa do supervisor que o agente fez ao sair (senão a loja fica sem keepalive até o próximo login — adversarial L3 r2) e NÃO relança (com o agente vivo, relançar mataria a instância no macOS)")
+    void cancelamentosDesfazemAPausa(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        dirs.garantir();
+        PlanoAtualizacao p = plano(tmp);
+        Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
+        p.gravar(arquivoPlano);
+        List<String> ordem = new ArrayList<>();
+        AplicadorAtualizacao a = new AplicadorAtualizacao(new PrintStream(new ByteArrayOutputStream()),
+                plano -> { ordem.add("instalar"); return new AplicadorAtualizacao.Instalador.Resultado(true, "ok", Optional.empty()); },
+                launcher -> ordem.add("relancar:" + launcher.getFileName()), Duration.ofMillis(300), plano -> ordem.add("pausar"),
+                plano -> ordem.add("desfazer-pausa:" + plano.map(PlanoAtualizacao::versaoNova).orElse("sem-plano")));
+        try (TravaDeInstancia ocupada = TravaDeInstancia.tentar(dirs.lock()).orElseThrow()) {
+            assertThat(a.aplicar(arquivoPlano)).isEqualTo(Main.SAIDA_FALHA);
+        }
+        assertThat(ordem).containsExactly("desfazer-pausa:9.9.9");
+
+        ordem.clear();
+        Path lixo = dirs.atualizacao().resolve("lixo.json");
+        Files.writeString(lixo, "{ isto não é um plano");
+        assertThat(a.aplicar(lixo)).isEqualTo(Main.SAIDA_FALHA);
+        assertThat(ordem).containsExactly("desfazer-pausa:sem-plano");
+    }
+
+    @Test
+    @DisplayName("plano INVERTIDO (reversão entregue pela sentinela): MSI anterior OK → é o ATUALIZADOR que registra 'versão nova recusada 24 h' e limpa o emAplicacao; MSI anterior FALHOU → esquece a troca SEM recusar nada (a versão nova segue rodando: dizer 'revertida' seria mentira — adversarial L3 r2)")
+    void planoInvertidoFechaOEstadoComOResultadoReal(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        EstadoAtualizacao estado = new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json"));
+        Path exeAnterior = tmp.resolve("anterior.exe"); Files.writeString(exeAnterior, "old");
+        PlanoAtualizacao invertido = new PlanoAtualizacao("1.0.0", "9.9.9", exeAnterior.toString(), "", "anterior.exe", ManifestoRelease.FormatoInstalado.INSTALADOR,
+                Optional.of(tmp.resolve("bin/AgroEase-Agente-Impressao").toString()), tmp.toString(), Instant.now(), PlanoAtualizacao.Gatilho.AUTO);
+        Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
+
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 2));
+        invertido.gravar(arquivoPlano);
+        AplicadorAtualizacao ok = new AplicadorAtualizacao(new PrintStream(new ByteArrayOutputStream()),
+                plano -> new AplicadorAtualizacao.Instalador.Resultado(true, "msiexec 0", Optional.empty()), launcher -> { }, Duration.ofSeconds(2));
+        assertThat(ok.aplicar(arquivoPlano)).isZero();
+        assertThat(estado.ler().emAplicacao()).isEmpty();
+        assertThat(estado.ler().recusada()).map(EstadoAtualizacao.Recusada::versao).contains("9.9.9");
+
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 2));
+        invertido.gravar(arquivoPlano);
+        AplicadorAtualizacao falhou = new AplicadorAtualizacao(new PrintStream(new ByteArrayOutputStream()),
+                plano -> new AplicadorAtualizacao.Instalador.Resultado(false, "msiexec 1603", Optional.empty()), launcher -> { }, Duration.ofSeconds(2));
+        assertThat(falhou.aplicar(arquivoPlano)).isEqualTo(Main.SAIDA_FALHA);
+        assertThat(estado.ler().emAplicacao()).isEmpty();
+        assertThat(estado.ler().recusada()).as("a 9.9.9 continua instalada e rodando: nada de 'recusada'").isEmpty();
     }
 }

@@ -23,6 +23,8 @@ record Argumentos(Comando comando, Map<String, String> opcoes, List<String> posi
     static final String OPT_DIR = "dir-dados";
     static final String FLAG_SEM_BANDEJA = "sem-bandeja";
     static final String FLAG_VERBOSO = "verboso";
+    /** Posta pela tarefa keepalive do Windows na ação: a 2ª instância vinda DELA (a cada 1 min) sai muda; a de um clique humano avisa. */
+    static final String FLAG_KEEPALIVE = "keepalive";
 
     private static final Map<String, Comando> COMANDOS = Map.ofEntries(
             Map.entry("--parear", Comando.PAREAR),
@@ -42,7 +44,7 @@ record Argumentos(Comando comando, Map<String, String> opcoes, List<String> posi
             Map.entry("--help", Comando.AJUDA),
             Map.entry("-h", Comando.AJUDA));
     private static final Set<String> COM_VALOR = Set.of(OPT_BACKEND, OPT_PORTA, OPT_DIR);
-    private static final Set<String> FLAGS = Set.of(FLAG_SEM_BANDEJA, FLAG_VERBOSO);
+    private static final Set<String> FLAGS = Set.of(FLAG_SEM_BANDEJA, FLAG_VERBOSO, FLAG_KEEPALIVE);
     /** Quantos posicionais cada comando exige. */
     private static final Map<Comando, Integer> POSICIONAIS = Map.of(
             Comando.PAREAR, 1, Comando.GERAR_PDF_TESTE, 1, Comando.IMPRIMIR_TESTE, 2, Comando.APLICAR_ATUALIZACAO, 1);

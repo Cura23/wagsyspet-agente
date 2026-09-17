@@ -42,12 +42,19 @@ public final class GerenteAtualizacao {
 
     public enum DecisaoBoot { SEGUIR, AGUARDAR_CONFIRMACAO, REVERTER }
 
+    /** Quem guarda o instalador da versão ATUAL para o rollback (Windows — plano F6 D4). Nunca lança; vazio = sem rollback automático. */
+    @FunctionalInterface
+    public interface GuardaDoAnterior {
+        Optional<Path> garantir(String versaoAtual);
+    }
+
     private final DiretoriosDoAgente dirs;
     private final EstadoAtualizacao estado;
     private final ClienteRelease cliente;
     private final VerificadorAtualizacao verificador;
     private final Clock relogio;
     private final Duration ociosidadeMinima;
+    private volatile Optional<GuardaDoAnterior> guarda = Optional.empty();
 
     public GerenteAtualizacao(DiretoriosDoAgente dirs, EstadoAtualizacao estado, ClienteRelease cliente, VerificadorAtualizacao verificador, Clock relogio) {
         this(dirs, estado, cliente, verificador, relogio, OCIOSIDADE_MINIMA);
@@ -61,6 +68,11 @@ public final class GerenteAtualizacao {
         this.verificador = Objects.requireNonNull(verificador);
         this.relogio = Objects.requireNonNull(relogio);
         this.ociosidadeMinima = Objects.requireNonNull(ociosidadeMinima);
+    }
+
+    /** Liga a guarda do instalador anterior (só faz sentido onde o instalador substitui o antigo in-place: Windows/MSI). */
+    public void guardaAnterior(GuardaDoAnterior guarda) {
+        this.guarda = Optional.ofNullable(guarda);
     }
 
     public String versaoAtual() {
@@ -80,7 +92,24 @@ public final class GerenteAtualizacao {
     }
 
     /** Consulta o manifesto e, havendo versão nova aceitável, deixa o instalador baixado e verificado. Nunca lança. */
-    public synchronized Situacao verificar() {
+    /**
+     * Verifica/baixa sob o monitor e, com a atualização PRONTA, aciona a guarda do instalador anterior FORA dele: são ~70 MB de
+     * outro download e, dentro do monitor, prenderiam "Atualizar agora", o pareamento e a confirmação de saúde (adversarial L3).
+     * Quem aplica sozinho (zelador) chama isto e o {@code podeAplicar} na MESMA thread — então só aplica depois de a guarda tentar.
+     */
+    public Situacao verificar() {
+        Situacao s = verificarSobMonitor();
+        if (s == Situacao.DISPONIVEL_BAIXADO && estado.ler().emAplicacao().isEmpty()) {
+            guardarAnterior();
+        }
+        return s;
+    }
+
+    public boolean temGuardaAnterior() {
+        return guarda.isPresent();
+    }
+
+    private synchronized Situacao verificarSobMonitor() {
         EstadoAtualizacao.Estado e = estado.ler();
         if (e.emAplicacao().isPresent()) {
             return e.artefatoBaixado().isPresent() ? Situacao.DISPONIVEL_BAIXADO : Situacao.ATUALIZADO; // troca em curso: não mexer
@@ -140,6 +169,23 @@ public final class GerenteAtualizacao {
         return Situacao.DISPONIVEL_BAIXADO;
     }
 
+    /**
+     * Com a atualização pronta, garante o instalador da versão ATUAL em {@code anterior/} ANTES de aplicar (o rollback do Windows depende
+     * dele). Barato quando já está lá (só sha local); falha de rede/servidor não impede a atualização — fica sem rollback automático.
+     */
+    private void guardarAnterior() {
+        guarda.ifPresent(g -> {
+            try {
+                Optional<Path> exe = g.garantir(verificador.versaoAtual());
+                if (exe.isEmpty()) {
+                    log.info("Sem instalador da versão atual ({}) guardado: a atualização segue sem rollback automático", verificador.versaoAtual());
+                }
+            } catch (RuntimeException ex) {
+                log.warn("Guarda do instalador anterior falhou: {}", ex.toString());
+            }
+        });
+    }
+
     /** Pode aplicar agora? Instalador baixado E (ocioso há pelo menos {@link #OCIOSIDADE_MINIMA}). */
     public boolean podeAplicar(boolean ocioso, Duration ociosoHa) {
         return estado.ler().artefatoBaixado().isPresent() && estado.ler().emAplicacao().isEmpty()
@@ -179,6 +225,12 @@ public final class GerenteAtualizacao {
         EstadoAtualizacao.Estado e = estado.ler();
         if (e.emAplicacao().isEmpty()) {
             return DecisaoBoot.SEGUIR;
+        }
+        if (VersaoSemantica.comparar(e.emAplicacao().get().versaoNova(), verificador.versaoAtual()) != 0) {
+            // quem subiu é o binário ANTIGO (o atualizador ainda não trocou, ou não conseguiu): não é tentativa da versão nova —
+            // contar aqui faria o 1º boot legítimo dela virar REVERTER (adversarial L3). O confirmar() decide (recusa por 24 h).
+            log.warn("Boot da versão {} com troca para {} pendente: não conta como tentativa", verificador.versaoAtual(), e.emAplicacao().get().versaoNova());
+            return DecisaoBoot.AGUARDAR_CONFIRMACAO;
         }
         int tentativas = e.tentativasBoot() + 1;
         gravar(e.comTentativasBoot(tentativas));

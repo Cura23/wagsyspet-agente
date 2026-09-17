@@ -67,7 +67,8 @@ final class AgenteDesktop implements AcoesUi.Agente {
      */
     record Atualizacao(GerenteAtualizacao gerente, LancadorAtualizador lancador, Reversor reversor,
                        Duration verificacaoInicial, Duration intervaloVerificacao, Duration intervaloTentativa, Duration prazoSaude) {
-        static Atualizacao padrao(DiretoriosDoAgente dirs, String versao) {
+        /** @param pausarSupervisor/retomarSupervisor keepalive do Windows — o reversor de lá sai para o atualizador instalar a versão anterior */
+        static Atualizacao padrao(DiretoriosDoAgente dirs, String versao, Runnable pausarSupervisor, Runnable retomarSupervisor) {
             ManifestoRelease.FormatoInstalado formato = ComandosAtualizacao.formatoInstalado(Autostart.launcherDesteProcesso(), Path.of(System.getProperty("user.home", ".")));
             LancadorAtualizador deFora = br.com.wagner.wagsyspet.agente.app.atualizacao.LancadorAtualizadorDeFora.padrao(dirs, versao, comando -> {
                 try {
@@ -78,7 +79,7 @@ final class AgenteDesktop implements AcoesUi.Agente {
                 }
             });
             return new Atualizacao(ComandosAtualizacao.gerentePadrao(dirs, versao), deFora,
-                    br.com.wagner.wagsyspet.agente.app.atualizacao.Instaladores.reversorDesteSo(dirs, formato),
+                    br.com.wagner.wagsyspet.agente.app.atualizacao.Instaladores.reversorDesteSo(dirs, formato, deFora, pausarSupervisor, retomarSupervisor),
                     GerenteAtualizacao.VERIFICACAO_INICIAL, GerenteAtualizacao.INTERVALO_VERIFICACAO, Duration.ofSeconds(30), GerenteAtualizacao.PRAZO_SAUDE);
         }
     }
@@ -109,6 +110,13 @@ final class AgenteDesktop implements AcoesUi.Agente {
     private volatile FileTime cofreVistoEm;
     private final Optional<Atualizacao> atualizacao;
     private volatile boolean aplicandoAtualizacao;
+    /**
+     * Supervisor que relança sozinho MESMO com saída 0 (só a tarefa keepalive do Windows): pausado quando a pessoa encerra o agente
+     * (Sair / erro fatal visto) e quando o agente sai para o atualizador instalar — senão o disparo de 1 min reabre o agente VELHO no
+     * meio do msiexec (adversarial L3). Quem reabilita depois é o atualizador (relançamento) ou a próxima subida.
+     */
+    private volatile Runnable pausarSupervisor = () -> { };
+    private volatile Runnable retomarSupervisor = () -> { };
     private volatile long ultimoAvisoAtualizacaoDia = -1;
 
     AgenteDesktop(DiretoriosDoAgente dirs, String versao, int[] portas, PrintStream out, PortaImpressao impressao) {
@@ -143,7 +151,15 @@ final class AgenteDesktop implements AcoesUi.Agente {
             switch (g.avaliarBoot()) {
                 case REVERTER -> {
                     EstadoAtualizacao.EmAplicacao ap = g.emAplicacao().orElseThrow();
-                    boolean revertido = atualizacao.get().reversor().reverter(ap);
+                    Reversor reversor = atualizacao.get().reversor();
+                    boolean revertido = reversor.reverter(ap);
+                    if (revertido && reversor.adiada()) {
+                        // Windows: a volta foi ENTREGUE ao atualizador de fora; é ele que fecha o estado com o resultado real do MSI
+                        // (marcar "revertida" aqui mentiria se o MSI anterior falhar — adversarial L3 r2)
+                        log.warn("Reversão {} → {} entregue ao atualizador; saindo para ele instalar", ap.versaoNova(), ap.versaoAnterior());
+                        out.println("Atualização para " + ap.versaoNova() + " não confirmou; voltando para " + ap.versaoAnterior() + " (o agente reabre sozinho).");
+                        return SAIDA_REVERTIDA;
+                    }
                     g.marcarRevertida(ap, revertido ? "revertida para " + ap.versaoAnterior() : "não confirmou saúde; sem reversor neste SO, segue nesta versão");
                     out.println("Atualização para " + ap.versaoNova() + " não confirmou; " + (revertido ? "voltando para " + ap.versaoAnterior() + "." : "seguindo na versão atual."));
                     if (revertido) {
@@ -166,6 +182,7 @@ final class AgenteDesktop implements AcoesUi.Agente {
                     // diálogo SÍNCRONO (o assíncrono seguido de exit nunca era visto); com uma pessoa avisada, sai 0 para o launchd
                     // do macOS não reabrir em loop a cada 10 s — sem UI (serviço) mantém o 4 = "intervenção humana"
                     ui.erroFatal("Agente de Impressão AgroEase", e.getMessage() + "\n\nFeche o outro programa e abra o agente de novo.");
+                    pausarSupervisorAposErroFatal(); // Windows: senão o diálogo volta a cada 1 min
                     return SAIDA_OK;
                 }
                 return SAIDA_SEM_PORTA;
@@ -174,6 +191,7 @@ final class AgenteDesktop implements AcoesUi.Agente {
                 out.println("O agente não conseguiu iniciar: " + e.getMessage());
                 if (ui != null) {
                     ui.erroFatal("Agente de Impressão AgroEase", "O agente não conseguiu iniciar: " + e.getMessage());
+                    pausarSupervisorAposErroFatal(); // a pessoa já viu: o keepalive do Windows não pode reabrir o mesmo erro a cada 1 min (sem bandeja para "Sair")
                 }
                 return SAIDA_SERVIDOR_MORTO;
             }
@@ -314,6 +332,7 @@ final class AgenteDesktop implements AcoesUi.Agente {
         }
         if (ui != null) {
             ui.erroFatal("Agente de Impressão AgroEase", "O agente parou de responder e não conseguiu reiniciar sozinho. Abra o agente de novo.");
+            pausarSupervisorAposErroFatal(); // idem: quem reabre é a pessoa, como a mensagem pede
         }
         encerramento.complete(SAIDA_SERVIDOR_MORTO);
     }
@@ -450,13 +469,15 @@ final class AgenteDesktop implements AcoesUi.Agente {
                 ui.estado("Atualizando…", "O agente volta sozinho em até 1 minuto.", p != null);
             }
             pararServidorSilencioso();
+            pausarSupervisor(); // ANTES de sair: o disparo de 1 min do keepalive reabriria o agente velho no meio da instalação
             try {
                 at.lancador().lancar(plano);
                 log.info("Atualizador lançado ({}); encerrando para ele aplicar {}", gatilho, plano);
                 out.println("Atualizando o agente; ele volta sozinho em até 1 minuto.");
                 encerramento.complete(SAIDA_OK);
-            } catch (IOException e) {
+            } catch (IOException | RuntimeException e) { // a fiação real lança UncheckedIOException (ProcessBuilder dentro de lambda)
                 log.error("Não consegui lançar o atualizador: {}", e.toString());
+                retomarSupervisor();
                 at.gerente().abortarAplicacao(e.toString());
                 aplicandoAtualizacao = false;
                 if (ui != null) {
@@ -495,7 +516,7 @@ final class AgenteDesktop implements AcoesUi.Agente {
                 throw new IOException("o servidor não subiu a tempo", e);
             }
         }
-        String autostart = ComandosAutostart.padrao(out, out).ativarAposPareamento().map(m -> "\n" + m).orElse("");
+        String autostart = ComandosAutostart.padrao(dirs, out, out).ativarAposPareamento().map(m -> "\n" + m).orElse("");
         if (ui != null) {
             ui.aviso("Pareado", "Este computador foi pareado com a loja " + novo.lojaId() + ".\nAgora escolha a impressora em \"Impressora…\"." + autostart);
         }
@@ -570,9 +591,48 @@ final class AgenteDesktop implements AcoesUi.Agente {
         return s == null ? null : s.getPort();
     }
 
+    void supervisor(Runnable pausar, Runnable retomar) {
+        this.pausarSupervisor = Objects.requireNonNull(pausar);
+        this.retomarSupervisor = Objects.requireNonNull(retomar);
+    }
+
+    private void pausarSupervisor() {
+        try {
+            pausarSupervisor.run();
+        } catch (RuntimeException e) {
+            log.warn("Não consegui pausar o supervisor: {}", e.toString());
+        }
+    }
+
+    private void retomarSupervisor() {
+        try {
+            retomarSupervisor.run();
+        } catch (RuntimeException e) {
+            log.warn("Não consegui retomar o supervisor: {}", e.toString());
+        }
+    }
+
+    /**
+     * Erro fatal que a pessoa já viu: pausa o supervisor para o mesmo diálogo não voltar a cada minuto — MENOS com uma troca de versão
+     * pendente de confirmação: aí o supervisor TEM de dar o 2º boot, que é o que leva a sentinela ao REVERTER (adversarial L3 r2).
+     */
+    private void pausarSupervisorAposErroFatal() {
+        boolean sobSentinela = atualizacao.map(at -> at.gerente().emAplicacao().isPresent()).orElse(false);
+        if (sobSentinela) {
+            log.warn("Erro fatal com troca de versão pendente: supervisor mantido para o 2º boot (sentinela)");
+            return;
+        }
+        pausarSupervisor();
+    }
+
+    private void sairDefinitivo(int codigo) {
+        pausarSupervisor();
+        encerramento.complete(codigo);
+    }
+
     @Override
     public void sair() {
         log.info("Saída pedida pela interface");
-        encerramento.complete(SAIDA_OK);
+        sairDefinitivo(SAIDA_OK);
     }
 }

@@ -59,6 +59,12 @@ class ClienteReleaseTest {
             ex.sendResponseHeaders(200, declarado);
             try (OutputStream out = ex.getResponseBody()) { out.write(corpo, 0, (int) Math.min(corpo.length, declarado)); } catch (IOException ignorada) { }
         });
+        servidor.createContext("/estanca.deb", ex -> { // headers + 10 bytes e o corpo PARA (CDN/rede ruim/ataque): o timeout do HttpRequest só cobre até os headers
+            ex.sendResponseHeaders(200, artefato.length);
+            OutputStream out = ex.getResponseBody();
+            try { out.write(artefato, 0, 10); out.flush(); Thread.sleep(8_000); out.close(); } catch (IOException | InterruptedException ignorada) { }
+        });
+        servidor.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
         servidor.start();
         base = "http://127.0.0.1:" + servidor.getAddress().getPort();
     }
@@ -137,5 +143,19 @@ class ClienteReleaseTest {
     void servidorFora() {
         ClienteRelease c = new ClienteRelease(URI.create("http://127.0.0.1:1/latest.json"), Duration.ofSeconds(2), "1.0.0-teste");
         assertThatThrownBy(() -> c.buscarManifesto(null)).isInstanceOf(ClienteRelease.ReleaseIndisponivelException.class);
+    }
+
+    @Test
+    @DisplayName("download que ESTANCA no meio do corpo → falha em ~prazo (sem progresso), parcial apagado — nunca prende a thread do zelador para sempre (adversarial L3)")
+    void corpoEstancado(@TempDir Path tmp) throws Exception {
+        ClienteRelease impaciente = new ClienteRelease(URI.create(base + "/latest.json"), Duration.ofSeconds(1), "1.0.0-teste");
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(artefato));
+        ManifestoRelease.Artefato a = new ManifestoRelease.Artefato("x.deb", base + "/estanca.deb", sha, artefato.length);
+        Path destino = tmp.resolve("x.deb");
+        long t0 = System.nanoTime();
+        assertThatThrownBy(() -> impaciente.baixarArtefato(a, destino)).isInstanceOf(ClienteRelease.ReleaseIndisponivelException.class);
+        assertThat(Duration.ofNanos(System.nanoTime() - t0)).isLessThan(Duration.ofSeconds(6));
+        assertThat(destino).doesNotExist();
+        assertThat(tmp.resolve("x.deb.tmp")).doesNotExist();
     }
 }

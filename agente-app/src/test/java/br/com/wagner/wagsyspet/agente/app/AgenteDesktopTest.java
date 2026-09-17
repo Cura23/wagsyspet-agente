@@ -240,6 +240,34 @@ class AgenteDesktopTest {
         }
     }
 
+
+    @Test
+    @DisplayName("2ª instância disparada pelo Agendador (--keepalive, a cada 1 min no Windows) com o agente já aberto → sai 0 MUDA: sem mensagem, sem diálogo, sem tocar o log; sem a flag (clique humano) continua avisando")
+    void segundaInstanciaDoKeepaliveSaiMuda(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        dirs.garantir();
+        try (TravaDeInstancia aberta = TravaDeInstancia.tentar(dirs.lock()).orElseThrow()) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            try (PrintStream pout = new PrintStream(out, true, StandardCharsets.UTF_8)) {
+                assertThat(Main.executar(new String[]{"--keepalive", "--dir-dados", tmp.toString()}, pout, pout)).isZero();
+            }
+            assertThat(out.toString(StandardCharsets.UTF_8)).isEmpty();
+            try (var arquivos = Files.list(dirs.logs())) { // a pasta existe (garantir()), mas nenhum arquivo de log é aberto: seriam 1.440 aberturas por dia
+                assertThat(arquivos.toList()).isEmpty();
+            }
+
+            ByteArrayOutputStream humano = new ByteArrayOutputStream();
+            String versaoAntes = System.getProperty("agente.versao");
+            System.setProperty("agente.versao", "1.0.0-teste"); // fora do binário empacotado não há MANIFEST; o caminho "humano" anuncia a versão no log
+            try (PrintStream pout = new PrintStream(humano, true, StandardCharsets.UTF_8)) {
+                assertThat(Main.executar(new String[]{"--sem-bandeja", "--dir-dados", tmp.toString()}, pout, pout)).isZero();
+            } finally {
+                if (versaoAntes == null) { System.clearProperty("agente.versao"); } else { System.setProperty("agente.versao", versaoAntes); }
+                java.util.logging.LogManager.getLogManager().reset(); // fecha o agente-0.log aberto pelo caminho "humano" (no Windows o @TempDir não apaga arquivo aberto)
+            }
+            assertThat(humano.toString(StandardCharsets.UTF_8)).contains("já está em execução");
+        }
+    }
     @Test
     @DisplayName("Main.executar: erro de argumento → 2 com o uso; --ajuda → 0; --status com --dir-dados → 0 sem tocar a pasta padrão")
     void mainComandos(@TempDir Path tmp) throws Exception {

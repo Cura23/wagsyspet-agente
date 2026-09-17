@@ -94,7 +94,7 @@ final class ComandosPareamento {
                     out.println("ATENÇÃO: o relógio deste computador está " + ClientePareamento.descreverDesvio(d)
                             + " em relação ao servidor. Acerte a data/hora, senão a impressão pode ser recusada."));
             out.println("Identidade deste caixa: " + p.agenteId() + " (chave do ticket " + p.fingerprintChave() + ").");
-            ComandosAutostart.padrao(out, err).ativarAposPareamento().ifPresent(out::println);
+            ComandosAutostart.padrao(dirs, out, err).ativarAposPareamento().ifPresent(out::println);
             if (agenteAberto()) {
                 out.println("O agente já está aberto neste computador e vai aplicar o novo pareamento em alguns segundos.");
             } else {
@@ -163,7 +163,7 @@ final class ComandosPareamento {
                     + " · origins permitidas " + x.origensPermitidas());
         }
         out.println("Impressora deste computador: " + new ConfiguracaoLocalArquivo(dirs.config()).impressoraSelecionada().orElse("(nenhuma escolhida)"));
-        out.println("Iniciar com o sistema: " + ComandosAutostart.padrao(out, err).linhaStatus());
+        out.println("Iniciar com o sistema: " + ComandosAutostart.padrao(dirs, out, err).linhaStatus());
         out.println("Atualização automática: " + br.com.wagner.wagsyspet.agente.core.atualizacao.GerenteAtualizacao.resumo(
                 new br.com.wagner.wagsyspet.agente.core.atualizacao.EstadoAtualizacao(dirs.atualizacao().resolve("estado.json")), java.time.Clock.systemUTC()));
         return SAIDA_OK;

@@ -114,10 +114,10 @@ public final class Main {
                 return r.aceito() ? 0 : SAIDA_FALHA;
             }
             case INSTALAR -> {
-                return ComandosAutostart.padrao(out, err).instalar();
+                return ComandosAutostart.padrao(dirs, out, err).instalar();
             }
             case DESINSTALAR -> {
-                return ComandosAutostart.padrao(out, err).desinstalar();
+                return ComandosAutostart.padrao(dirs, out, err).desinstalar();
             }
             case VERIFICAR_ATUALIZACAO -> {
                 return ComandosAtualizacao.padrao(out, err, versao()).verificar();
@@ -144,11 +144,22 @@ public final class Main {
     /** Sem comando: programa de desktop. Uma instância por usuário; bandeja → janela → só CLI (headless). */
     private static int servir(Argumentos a, DiretoriosDoAgente dirs, PrintStream out, boolean verboso) throws Exception {
         dirs.garantir();
+        Optional<TravaDeInstancia> trava = null;
+        if (a.flag(Argumentos.FLAG_KEEPALIVE)) {
+            // disparo de 1 min da tarefa keepalive (Windows) com o agente já aberto fora dela: sai MUDO — sem diálogo, sem mensagem e
+            // ANTES de abrir o log (seriam 1.440 aberturas/dia disputando o arquivo com o agente de verdade) — adversarial L3
+            trava = TravaDeInstancia.tentar(dirs.lock());
+            if (trava.isEmpty()) {
+                return 0;
+            }
+        }
         boolean console = System.console() != null || verboso;
         Path logAtivo = LogDoAgente.configurar(dirs.logs(), verboso, console);
         log.info("=== {} {} iniciando (pasta {}, log {}) ===", NOME_PRODUTO, versao(), dirs.raiz(), logAtivo);
 
-        Optional<TravaDeInstancia> trava = TravaDeInstancia.tentar(dirs.lock());
+        if (trava == null) {
+            trava = TravaDeInstancia.tentar(dirs.lock());
+        }
         if (trava.isEmpty()) {
             String msg = NOME_PRODUTO + " já está em execução neste computador (procure o ícone na bandeja ou a janela do agente).";
             log.warn("Segunda instância; saindo com 0");
@@ -160,14 +171,19 @@ public final class Main {
         }
         try (TravaDeInstancia ignorada = trava.get()) {
             int[] portas = a.porta() != null ? new int[]{a.porta()} : SubidaComFallback.PORTAS_PADRAO;
+            ComandosAutostart autostart = ComandosAutostart.padrao(dirs, out, out);
+            autostart.retomarKeepalive(); // Windows: desfaz um "Sair"/atualização anterior e migra o Run da v1.0.0 para a tarefa keepalive
             Optional<AgenteDesktop.Atualizacao> atualizacao;
             try {
-                atualizacao = Optional.of(AgenteDesktop.Atualizacao.padrao(dirs, versao()));
+                atualizacao = Optional.of(AgenteDesktop.Atualizacao.padrao(dirs, versao(), autostart::pausarKeepalive, autostart::retomarKeepalive));
             } catch (RuntimeException e) {
                 log.warn("Self-update desligado nesta execução: {}", e.toString());
                 atualizacao = Optional.empty();
             }
             AgenteDesktop agente = new AgenteDesktop(dirs, versao(), portas, out, PortaImpressao.real(), atualizacao);
+            // Windows: "Sair", erro fatal visto e saída para ATUALIZAR pausam a tarefa keepalive (senão ela reabre o agente em 1 min — no
+            // update, o agente VELHO no meio do msiexec); se o atualizador nem chegar a ser lançado, retoma
+            agente.supervisor(autostart::pausarKeepalive, autostart::retomarKeepalive);
             Superficie ui = montarUi(a, agente);
             if (ui != null) {
                 agente.ui(ui);

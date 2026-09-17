@@ -99,6 +99,18 @@ class ComandosAtualizacaoTest {
     }
 
     @Test
+    @DisplayName("gerente do --atualizar (CLI) e do agente de desktop saem da MESMA fábrica: Windows + instalador (MSI) → com a guarda do instalador anterior; Linux/macOS ou app-image → sem (o rollback lá é a troca de diretório)")
+    void gerenteComGuardaNoWindows(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp) {
+        br.com.wagner.wagsyspet.agente.core.pareamento.DiretoriosDoAgente dirs = new br.com.wagner.wagsyspet.agente.core.pareamento.DiretoriosDoAgente(tmp);
+        ComandosAtualizacao c = comando("1.0.0");
+        assertThat(c.gerente(dirs, "Windows 11").temGuardaAnterior()).isTrue();
+        assertThat(c.gerente(dirs, "Linux").temGuardaAnterior()).isFalse();
+        assertThat(c.gerente(dirs, "Mac OS X").temGuardaAnterior()).isFalse();
+        ComandosAtualizacao appImage = new ComandosAtualizacao(out, out, "1.0.0", URI.create(base + "/latest.json"), chaves, ManifestoRelease.FormatoInstalado.APP_IMAGE);
+        assertThat(appImage.gerente(dirs, "Windows 11").temGuardaAnterior()).isFalse();
+    }
+
+    @Test
     @DisplayName("formato instalado pelo caminho do launcher: /opt e Program Files = instalador; ~/.local = app-image (tar.gz); sem launcher (java cru) = instalador")
     void formatoInstalado() {
         Path home = Path.of("/home/loja");

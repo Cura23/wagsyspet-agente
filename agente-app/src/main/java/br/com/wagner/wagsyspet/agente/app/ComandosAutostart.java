@@ -28,8 +28,9 @@ final class ComandosAutostart {
         this.err = err;
     }
 
-    static ComandosAutostart padrao(PrintStream out, PrintStream err) {
-        return new ComandosAutostart(Autostart.paraEsteSo(), out, err);
+    /** @param dirs pasta de dados em uso ({@code --dir-dados}/override respeitados) — o Windows guarda ali o XML da tarefa */
+    static ComandosAutostart padrao(br.com.wagner.wagsyspet.agente.core.pareamento.DiretoriosDoAgente dirs, PrintStream out, PrintStream err) {
+        return new ComandosAutostart(Autostart.paraEsteSo(dirs.raiz()), out, err);
     }
 
     int instalar() {
@@ -63,6 +64,27 @@ final class ComandosAutostart {
         } catch (IOException e) {
             err.println("Não foi possível desativar \"iniciar com o sistema\": " + e.getMessage());
             return Main.SAIDA_FALHA;
+        }
+    }
+
+    /** "Sair", erro fatal visto ou saída para atualizar: o supervisor não deve relançar sozinho (só o Windows faz algo). Nunca falha o encerramento. */
+    void pausarKeepalive() {
+        try {
+            autostart.pausar(Autostart.launcherDesteProcesso());
+        } catch (IOException e) {
+            log.warn("Não consegui pausar o \"iniciar com o sistema\": {}", e.toString());
+        }
+    }
+
+    /**
+     * Subida do agente: desfaz um {@link #pausarKeepalive()} anterior (a pessoa reabriu o agente ou fez logon) e, no Windows, migra o
+     * Run da v1.0.0 para a tarefa keepalive. Nunca impede a subida.
+     */
+    void retomarKeepalive() {
+        try {
+            autostart.retomar(Autostart.launcherDesteProcesso());
+        } catch (IOException e) {
+            log.warn("Não consegui retomar o \"iniciar com o sistema\": {}", e.toString());
         }
     }
 
@@ -103,6 +125,8 @@ final class ComandosAutostart {
         try {
             if (!autostart.instalado()) {
                 autostart.instalar(launcher.get(), false); // o agente está rodando agora: não lançar outro
+            } else {
+                autostart.retomar(launcher); // pode estar pausado por um "Sair" anterior, ou ainda no Run da v1.0.0
             }
             return Optional.of("O agente vai iniciar junto com o sistema neste computador.");
         } catch (IOException e) {
