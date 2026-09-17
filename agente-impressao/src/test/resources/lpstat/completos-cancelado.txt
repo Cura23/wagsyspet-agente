@@ -1,0 +1,4 @@
+AGROEASE_TESTE_MORTA-49 lojista           1024   Thu Sep 17 09:56:15 2026
+	Status: The printer may not exist or is unavailable at this time.
+	Alerts: job-canceled-by-user
+	queued for AGROEASE_TESTE_MORTA

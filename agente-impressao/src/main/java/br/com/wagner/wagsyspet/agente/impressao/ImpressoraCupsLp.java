@@ -1,5 +1,6 @@
 package br.com.wagner.wagsyspet.agente.impressao;
 
+import br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoCups;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
@@ -105,7 +106,7 @@ public final class ImpressoraCupsLp {
     /** Roda o comando com prazo REAL: stdout lido em thread própria; estourou → mata o processo e devolve ERRO. */
     static Resultado executar(List<String> cmd, Duration prazo, String nomeImpressora, String nomeJob, ModoPapel modo) {
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
-        pb.environment().put("LC_ALL", "C"); // saída em inglês → parse estável de "request id is X-N"
+        br.com.wagner.wagsyspet.agente.impressao.spooler.ComandoSpooler.emIngles(pb.environment()); // parse estável de "request id is X-N"
         Process p;
         try {
             p = pb.start();
@@ -152,9 +153,11 @@ public final class ImpressoraCupsLp {
                     nomeImpressora, "lp saiu com " + exitValue + ": " + s);
         }
         Matcher m = REQUEST_ID.matcher(s);
-        String jobId = m.find() ? m.group(1) : "?";
+        String jobId = m.find() ? m.group(1) : AcompanhamentoCups.SEM_ID;
+        // F6-L4: o request id deixa de morrer neste texto — é a alça para perguntar ao CUPS o que aconteceu depois do aceite
         return new Resultado(Resultado.Estado.ACEITO_SPOOLER, nomeImpressora,
-                "Job '" + nomeJob + "' aceito pelo CUPS (request id " + jobId + ", modo " + modo + ")");
+                "Job '" + nomeJob + "' aceito pelo CUPS (request id " + jobId + ", modo " + modo + ")",
+                new AcompanhamentoCups(nomeImpressora, jobId));
     }
 
     /** Altura (mm, arredondada p/ cima) da 1ª página do PDF — o cupom de 80mm tem altura variável. */

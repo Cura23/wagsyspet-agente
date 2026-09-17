@@ -86,6 +86,7 @@ final class Diagnostico {
         }
         out.println("INFO  portas 127.0.0.1: " + portas.toString().trim());
         out.println("INFO  iniciar com o sistema: " + ComandosAutostart.padrao(dirs, out, out).linhaStatus());
+        out.println("INFO  estado do cupom no spooler: " + br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoWindows.diagnostico());
         out.println("INFO  relógio × servidor: " + relogioContraServidor());
 
         out.println(ok ? "DIAGNÓSTICO OK" : "DIAGNÓSTICO COM FALHAS");

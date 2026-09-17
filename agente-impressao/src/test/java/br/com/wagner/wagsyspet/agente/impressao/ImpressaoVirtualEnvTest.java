@@ -70,6 +70,26 @@ class ImpressaoVirtualEnvTest {
         assertThat(r.estado()).isEqualTo(ImpressoraJavaxPrint.Resultado.Estado.IMPRESSORA_INDISPONIVEL);
     }
 
+    @Test
+    @DisplayName("F6-L4: depois do aceite, o SPOOLER REAL do SO diz o estado final do job — IMPRESSO (cups-pdf: 'job-completed-successfully'; Windows: job visto na fila até PRINTED/sumir depois de imprimir)")
+    void estadoFinalImpresso() throws Exception {
+        String job = "AgroEase cupom ci-estado-" + UUID.randomUUID().toString().substring(0, 8);
+        var r = impressora.imprimirPdf(PdfDeTeste.cupom80mm(80, "AGROEASE - ESTADO DO SPOOLER", "Job: " + job), virtual, ModoPapel.PAPEL_DO_DRIVER, job);
+        assertThat(r.aceito()).as("spooler deve aceitar: %s", r.detalhe()).isTrue();
+        assertThat(r.acompanhamento()).as("todo job aceito nasce com a alça de acompanhamento").isPresent();
+        try (var acompanhamento = r.acompanhamento().get()) {
+            br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler e = acompanhamento.consultar();
+            Instant limite = Instant.now().plus(ESPERA_SPOOLER);
+            while (!e.encerrado() && Instant.now().isBefore(limite)) {
+                Thread.sleep(300);
+                e = acompanhamento.consultar();
+            }
+            System.out.println("[IMPRESSAO] estado final de " + job + " → " + e);
+            assertThat(e.estado()).as(e.detalhe()).isEqualTo(br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Estado.IMPRESSO);
+            assertThat(e.encerrado()).isTrue();
+        }
+    }
+
     private void imprimirEVerificar(ModoPapel modo) throws Exception {
         String job = "wagsyspet-ci-" + modo.name().toLowerCase() + "-" + UUID.randomUUID().toString().substring(0, 8);
         byte[] pdf = PdfDeTeste.cupom80mm(100,

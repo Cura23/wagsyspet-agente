@@ -1,0 +1,21 @@
+printer AGROEASE_TESTE_MORTA disabled since Thu Sep 17 09:56:17 2026 -
+	Paused
+	Form mounted:
+	Content types: any
+	Printer types: unknown
+	Description: AGROEASE_TESTE_MORTA
+	Alerts: paused
+	Location: 
+	Connection: direct
+	On fault: no alert
+	After fault: continue
+	Users allowed:
+		(all)
+	Forms allowed:
+		(none)
+	Banner required
+	Charset sets:
+		(none)
+	Default pitch:
+	Default page size:
+	Default port settings:

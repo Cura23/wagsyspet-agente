@@ -34,6 +34,8 @@
         <java-websocket.version>1.6.0</java-websocket.version>
         <jackson.version>2.19.2</jackson.version>
         <slf4j.version>2.0.17</slf4j.version>
+        <!-- F6-L4: fila do spooler do Windows (winspool EnumJobs/GetPrinter). Apache-2.0; jnidispatch.dll embutida no jar -->
+        <jna.version>5.17.0</jna.version>
         <junit.version>5.11.4</junit.version>
         <assertj.version>3.27.3</assertj.version>
         <surefire.version>3.5.2</surefire.version>
@@ -83,6 +85,16 @@
                 <artifactId>assertj-core</artifactId>
                 <version>${assertj.version}</version>
                 <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>net.java.dev.jna</groupId>
+                <artifactId>jna</artifactId>
+                <version>${jna.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.java.dev.jna</groupId>
+                <artifactId>jna-platform</artifactId>
+                <version>${jna.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

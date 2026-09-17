@@ -45,7 +45,10 @@ public final class Impressora {
         SubmissorPdf unix = ImpressoraCupsLp.disponivel()
                 ? ImpressoraCupsLp::imprimirPdf
                 : ImpressoraJavaxPrint::imprimirPdf; // fallback: exige lpr (cups-bsd)
-        return new Impressora(detectar(System.getProperty("os.name")), ImpressoraJavaxPrint::imprimirPdf, unix);
+        // Windows: o acompanhamento do job é armado ANTES do print() (F6-L4 — o spooler apaga o job ao imprimir)
+        SubmissorPdf windows = (pdf, impressora, modo, nomeJob) -> ImpressoraJavaxPrint.imprimirPdf(pdf, impressora, modo, nomeJob,
+                br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoWindows::armar);
+        return new Impressora(detectar(System.getProperty("os.name")), windows, unix);
     }
 
     /** Mapeia {@code os.name} para {@link Sistema}. Público-estático para ser testável sem trocar de SO. */

@@ -44,6 +44,32 @@ final class Mensagens {
         n.put("protocolo", info.protocolo());
         n.put("so", info.sistemaOperacional());
         n.put("agenteId", info.agenteId());
+        // F6 D6: o que ESTE agente sabe além do contrato F2/F3 (o PWA antigo ignora o campo; o novo evita perguntar a quem não sabe)
+        var capacidades = n.putArray("capacidades");
+        CAPACIDADES.forEach(capacidades::add);
+        return n.toString();
+    }
+
+    /** {@code estado_impressao}: push {@code impressao_estado} + pull {@code consultar_impressao}; {@code atualizacao}: fecha 1001 'ATUALIZANDO'. */
+    static final String ORIGEM_PUSH = "push";
+    static final String ORIGEM_CONSULTA = "consulta";
+
+    static final java.util.List<String> CAPACIDADES = java.util.List.of("estado_impressao", "atualizacao");
+
+    /**
+     * {@code impressao_estado{id, origem:'push'|'consulta', estado, motivo?, detalhe, encerrado}} — o que o SPOOLER disse do job depois do aceite (F6 D9).
+     * {@code motivo} só quando existe (o parser do PWA é por tipo: nada de null no fio).
+     */
+    static String impressaoEstado(String id, br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler e, String origem) {
+        ObjectNode n = base("impressao_estado");
+        n.put("id", id);
+        n.put("origem", origem); // push e resposta de consulta são o mesmo tipo com o mesmo id: é isto que os distingue no PWA
+        n.put("estado", e.estado().name());
+        if (e.motivo() != null) {
+            n.put("motivo", e.motivo().name());
+        }
+        n.put("detalhe", e.detalhe());
+        n.put("encerrado", e.encerrado());
         return n.toString();
     }
 
