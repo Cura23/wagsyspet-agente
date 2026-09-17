@@ -111,13 +111,20 @@ class ComandosAtualizacaoTest {
     }
 
     @Test
-    @DisplayName("formato instalado pelo caminho do launcher: /opt e Program Files = instalador; ~/.local = app-image (tar.gz); sem launcher (java cru) = instalador")
-    void formatoInstalado() {
+    @DisplayName("Fecho F6 — o tar.gz é o ÚNICO formato Linux que se atualiza sozinho, e a página manda extrair 'em uma pasta sua': QUALQUER pasta dentro do HOME no Linux = app-image (antes só ~/.local contava, e o resto caía no fluxo do .deb/dpkg); fora do HOME (/opt, /usr) = pacote do sistema; Windows e macOS nunca são app-image, mesmo com o launcher dentro do HOME (AppData, ~/Applications)")
+    void formatoInstaladoPorSo() {
         Path home = Path.of("/home/loja");
-        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(Path.of("/opt/agroease-agente-impressao/bin/AgroEase-Agente-Impressao")), home)).isEqualTo(ManifestoRelease.FormatoInstalado.INSTALADOR);
-        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(home.resolve(".local/share/agroease/agente-impressao/versoes/1.0.0/bin/AgroEase-Agente-Impressao")), home)).isEqualTo(ManifestoRelease.FormatoInstalado.APP_IMAGE);
-        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(Path.of("C:\\Users\\loja\\AppData\\Local\\AgroEase-Agente-Impressao\\AgroEase-Agente-Impressao.exe")), Path.of("C:\\Users\\loja"))).isEqualTo(ManifestoRelease.FormatoInstalado.INSTALADOR);
-        assertThat(ComandosAtualizacao.formatoInstalado(Optional.empty(), home)).isEqualTo(ManifestoRelease.FormatoInstalado.INSTALADOR);
+        var APP = ManifestoRelease.FormatoInstalado.APP_IMAGE;
+        var INST = ManifestoRelease.FormatoInstalado.INSTALADOR;
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(home.resolve("AgroEase/AgroEase-Agente-Impressao/bin/AgroEase-Agente-Impressao")), home, "Linux")).isEqualTo(APP);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(home.resolve("Downloads/AgroEase-Agente-Impressao/bin/AgroEase-Agente-Impressao")), home, "Linux")).isEqualTo(APP);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(home.resolve(".local/share/agroease/agente-impressao/AgroEase-Agente-Impressao/bin/AgroEase-Agente-Impressao")), home, "Linux")).isEqualTo(APP);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(Path.of("/opt/agroease-agente-impressao/bin/AgroEase-Agente-Impressao")), home, "Linux")).isEqualTo(INST);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(Path.of("/usr/lib/agroease/bin/AgroEase-Agente-Impressao")), home, "Linux")).isEqualTo(INST);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(Path.of("/home/lojavizinha/AgroEase/bin/x")), home, "Linux")).as("prefixo de OUTRO usuário não é o meu HOME").isEqualTo(INST);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(Path.of("C:\\Users\\loja\\AppData\\Local\\AgroEase-Agente-Impressao\\AgroEase-Agente-Impressao.exe")), Path.of("C:\\Users\\loja"), "Windows 11")).isEqualTo(INST);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.of(Path.of("/Users/loja/Applications/AgroEase-Agente-Impressao.app/Contents/MacOS/AgroEase-Agente-Impressao")), Path.of("/Users/loja"), "Mac OS X")).isEqualTo(INST);
+        assertThat(ComandosAtualizacao.formatoInstalado(Optional.empty(), home, "Linux")).isEqualTo(INST);
     }
 
     @Test

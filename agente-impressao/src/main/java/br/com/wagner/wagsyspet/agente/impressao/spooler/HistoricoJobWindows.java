@@ -43,6 +43,8 @@ public final class HistoricoJobWindows {
     public static final int PRINTER_STATUS_PAPER_JAM = 0x8;
     public static final int PRINTER_STATUS_PAPER_OUT = 0x10;
     public static final int PRINTER_STATUS_OFFLINE = 0x80;
+    /** {@code PRINTER_INFO_2.Attributes}: "Usar impressora offline" — é AQUI (e não em Status) que o Windows marca a USB desligada. */
+    public static final int PRINTER_ATTRIBUTE_WORK_OFFLINE = 0x400;
     public static final int PRINTER_STATUS_NOT_AVAILABLE = 0x1000;
     public static final int PRINTER_STATUS_USER_INTERVENTION = 0x100000;
     public static final int PRINTER_STATUS_DOOR_OPEN = 0x400000;
@@ -142,6 +144,15 @@ public final class HistoricoJobWindows {
                 quem + " na fila " + bits(ultimoStatus) + (statusImpressora == 0 ? "" : " impressora=0x" + Integer.toHexString(statusImpressora)));
     }
 
+    /**
+     * Fecho F6: o retrato real de "térmica USB desligada" é {@code Attributes & WORK_OFFLINE} com {@code Status == 0} — quem só lê
+     * Status nunca vê a impressora offline (só drivers com language monitor marcam o bit em Status, e nesses o JDK já recusa o job
+     * na entrada). Devolve o Status com o bit OFFLINE ligado quando os atributos dizem offline; o resto do caminho não muda.
+     */
+    public static int statusEfetivo(int status, int attributes) {
+        return (attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE) != 0 ? status | PRINTER_STATUS_OFFLINE : status;
+    }
+
     private static Motivo motivoPendente(int job, int impressora) {
         if ((job & JOB_STATUS_OFFLINE) != 0) {
             return Motivo.IMPRESSORA_OFFLINE;
@@ -155,9 +166,16 @@ public final class HistoricoJobWindows {
         if ((job & JOB_STATUS_PAUSED) != 0) {
             return Motivo.FILA_PARADA;
         }
+        // A IMPRESSORA dizendo offline/sem papel/tampa aberta vence o ERROR genérico do job: porta que tenta escrever numa
+        // impressora desligada deixa o job em ERROR|PRINTING, e "o driver deu erro" manda o lojista para o lugar errado.
         if ((job & (JOB_STATUS_ERROR | JOB_STATUS_BLOCKED_DEVQ)) != 0) {
-            return Motivo.ERRO_DRIVER;
+            Motivo daImpressora = motivoDaImpressora(impressora);
+            return daImpressora != null && daImpressora != Motivo.ERRO_DRIVER ? daImpressora : Motivo.ERRO_DRIVER;
         }
+        return motivoDaImpressora(impressora);
+    }
+
+    private static Motivo motivoDaImpressora(int impressora) {
         if ((impressora & PRINTER_STATUS_PAUSED) != 0) {
             return Motivo.FILA_PARADA;
         }

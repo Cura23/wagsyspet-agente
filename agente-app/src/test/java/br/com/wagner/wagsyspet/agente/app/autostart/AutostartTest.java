@@ -256,6 +256,37 @@ class AutostartTest {
         }
 
         @Test
+        @DisplayName("Fecho F6 — DOIS usuários Windows no mesmo PC (dono e funcionário): o nome da tarefa é global. A tarefa de OUTRO usuário (<UserId> com outro SID) NÃO é a minha: 'Sair' não a desabilita (o agente do outro não subiria mais sozinho), a subida não apaga o MEU Run por causa dela, instalar não a sobrescreve (/create /f trocaria o dono) e desinstalar não a apaga — eu fico no Run do registro")
+        void tarefaDeOutroUsuario(@TempDir Path pasta) throws IOException {
+            String sidDoOutro = "S-1-5-21-1111111111-2222222222-3333333333-1002";
+            String xmlDoOutro = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n<Task version=\"1.4\"><Triggers><LogonTrigger><Enabled>true</Enabled><UserId>" + sidDoOutro
+                    + "</UserId></LogonTrigger></Triggers><Principals><Principal id=\"Author\"><UserId>" + sidDoOutro + "</UserId></Principal></Principals>"
+                    + "<Settings><Enabled>true</Enabled></Settings></Task>";
+            java.util.concurrent.atomic.AtomicBoolean run = new java.util.concurrent.atomic.AtomicBoolean(true);
+            CmdFake cmd = new CmdFake();
+            cmd.resposta = c -> switch (c.get(0) + " " + c.get(1)) {
+                case "schtasks /query" -> new Saida(0, xmlDoOutro);
+                case "reg query" -> run.get() ? new Saida(0, "    " + AutostartWindows.VALOR + "    REG_SZ    \"C:\\x\\A.exe\"") : new Saida(1, "ERROR");
+                case "reg add" -> { run.set(true); yield new Saida(0, "ok"); }
+                case "reg delete" -> { run.set(false); yield new Saida(0, "ok"); }
+                case "whoami /user" -> new Saida(0, "\"caixa-pc\\funcionario\",\"" + SID + "\"");
+                default -> new Saida(0, "");
+            };
+            AutostartWindows a = new AutostartWindows(cmd, pasta);
+            Path exe = Path.of("C:\\x\\AgroEase-Agente-Impressao.exe");
+
+            a.retomar(java.util.Optional.of(exe)); // subida do MEU agente: a tarefa é do outro → meu Run fica
+            assertThat(run.get()).as("o Run é o MEU autostart: não pode ser apagado por causa da tarefa de outro usuário").isTrue();
+            a.pausar(java.util.Optional.of(exe)); // meu "Sair": não mexe na tarefa do outro
+            a.instalar(exe, false); // --instalar / pareamento: não sobrescreve a tarefa do outro
+            a.desinstalar();
+            assertThat(conta(cmd, "schtasks", "/change")).as("nunca desabilita/reabilita a tarefa de outro usuário").isZero();
+            assertThat(conta(cmd, "schtasks", "/create")).as("nunca sobrescreve (o /f trocaria o dono)").isZero();
+            assertThat(conta(cmd, "schtasks", "/delete")).isZero();
+            assertThat(a.descricao()).doesNotContain("Agendador (logon");
+        }
+
+        @Test
         @DisplayName("MIGRAÇÃO F3→F6 na subida: loja que já tem o Run da v1.0.0 e nenhuma tarefa → retomar(launcher) cria a tarefa e apaga o Run (sem launcher — dev — não mexe)")
         void migraRunDaF3NaSubida(@TempDir Path pasta) throws IOException {
             CmdFake cmd = cmdWindows(false, true);

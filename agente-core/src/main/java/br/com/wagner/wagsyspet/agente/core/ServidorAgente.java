@@ -643,10 +643,17 @@ public class ServidorAgente extends WebSocketServer {
                         log.warn("Impressão {}: saiu da fila depois do prazo — a gaveta NÃO é aberta (o cupom atrasado sai)", descricao);
                     } else {
                         ExtrasImpressao e = extras.get();
-                        Resultado g = impressao.enviarRaw(ComandosRaw.abrirGaveta(e.dialeto(), e.gavetaPino(), e.gavetaPulsoMs()), impressora, NOME_JOB_GAVETA + " " + id);
-                        if (!g.aceito()) {
-                            log.warn("Impressão {}: gaveta falhou ({}) — o cupom segue", descricao, g.detalhe());
+                        // Fecho F6: impressora fora → o pulso ficaria GUARDADO no spooler e a gaveta abriria sozinha quando ela voltasse
+                        java.util.Optional<String> impedimento = impressao.impedimentoDaGaveta(impressora);
+                        if (impedimento.isPresent()) {
+                            log.warn("Impressão {}: gaveta NÃO enviada — {} (o cupom segue)", descricao, impedimento.get());
                             avisos.add(Mensagens.AVISO_GAVETA_FALHOU);
+                        } else {
+                            Resultado g = impressao.enviarRaw(ComandosRaw.abrirGaveta(e.dialeto(), e.gavetaPino(), e.gavetaPulsoMs()), impressora, NOME_JOB_GAVETA + " " + id);
+                            if (!g.aceito()) {
+                                log.warn("Impressão {}: gaveta falhou ({}) — o cupom segue", descricao, g.detalhe());
+                                avisos.add(Mensagens.AVISO_GAVETA_FALHOU);
+                            }
                         }
                     }
                 }
@@ -781,6 +788,13 @@ public class ServidorAgente extends WebSocketServer {
                 return new Resultado(Resultado.Estado.ERRO, e.impressora(), "comando descartado: o opt-in foi desligado enquanto esperava");
             }
             ExtrasImpressao x = agora.get();
+            if (gaveta) {
+                // Fecho F6: só a GAVETA passa pelo pré-voo (pulso guardado no spooler = gaveta abrindo sozinha quando a impressora voltar)
+                java.util.Optional<String> impedimento = impressao.impedimentoDaGaveta(x.impressora());
+                if (impedimento.isPresent()) {
+                    return new Resultado(Resultado.Estado.IMPRESSORA_INDISPONIVEL, x.impressora(), "gaveta não enviada: " + impedimento.get());
+                }
+            }
             byte[] bytes = gaveta ? ComandosRaw.abrirGaveta(x.dialeto(), x.gavetaPino(), x.gavetaPulsoMs()) : ComandosRaw.cortar(x.dialeto());
             return impressao.enviarRaw(bytes, x.impressora(), nomeJob);
         }, new FilaImpressao.Resposta() {

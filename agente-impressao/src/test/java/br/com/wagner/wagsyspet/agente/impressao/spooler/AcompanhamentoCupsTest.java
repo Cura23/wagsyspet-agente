@@ -60,6 +60,18 @@ class AcompanhamentoCupsTest {
     }
 
     @Test
+    @DisplayName("Fecho F6 — reserva lpstat: job PARADO na fila por erro de filtro/backend ('job-completed-with-errors' no not-completed) → FALHOU{ERRO_DRIVER}. Antes o FALHOU era descartado, o código ia procurar no histórico (onde o job NÃO está) e devolvia DESCONHECIDO{SUMIU_DA_FILA} encerrado: o PWA não avisava nada e o cupom ficava parado para sempre")
+    void falhouNaFilaNaoViraSumiu() {
+        LpstatFalso lpstat = new LpstatFalso();
+        lpstat.naoCompletos = JOB.formatted("job-completed-with-errors");
+        AcompanhamentoCups a = new AcompanhamentoCups("PDF", "PDF-12", SEM_IPP, lpstat);
+        EstadoSpooler e = a.consultar();
+        assertThat(e.estado()).isEqualTo(Estado.FALHOU);
+        assertThat(e.motivo()).isEqualTo(Motivo.ERRO_DRIVER);
+        assertThat(lpstat.chamadas).as("decidiu pela fila: nem consulta o histórico").hasSize(1);
+    }
+
+    @Test
     @DisplayName("na fila → consulta também 'lpstat -l -p <fila>' para dizer POR QUE está parado; estado final (encerrado) é memorizado — não roda lpstat de novo")
     void pendenteConsultaAFilaETerminalEhMemorizado() {
         LpstatFalso lpstat = new LpstatFalso();

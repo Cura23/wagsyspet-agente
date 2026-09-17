@@ -29,7 +29,9 @@ class AplicadorAtualizacaoTest {
         Path art = tmp.resolve("atualizacao").resolve("baixado").resolve("novo.bin");
         Files.createDirectories(art.getParent());
         Files.write(art, "novo".getBytes(StandardCharsets.UTF_8));
-        return new PlanoAtualizacao("9.9.9", "1.0.0", art.toString(), "ab".repeat(32), "novo.bin", ManifestoRelease.FormatoInstalado.INSTALADOR,
+        // sha256 REAL do conteúdo: o atualizador reconfere o arquivo antes de executar (Fecho F6)
+        String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest("novo".getBytes(StandardCharsets.UTF_8)));
+        return new PlanoAtualizacao("9.9.9", "1.0.0", art.toString(), sha, "novo.bin", ManifestoRelease.FormatoInstalado.INSTALADOR,
                 Optional.of(tmp.resolve("bin/AgroEase-Agente-Impressao").toString()), tmp.toString(), Instant.now(), PlanoAtualizacao.Gatilho.AUTO);
     }
 
@@ -160,5 +162,55 @@ class AplicadorAtualizacaoTest {
         assertThat(falhou.aplicar(arquivoPlano)).isEqualTo(Main.SAIDA_FALHA);
         assertThat(estado.ler().emAplicacao()).isEmpty();
         assertThat(estado.ler().recusada()).as("a 9.9.9 continua instalada e rodando: nada de 'recusada'").isEmpty();
+    }
+
+    // ---------- Fecho F6 ----------
+
+    @Test
+    @DisplayName("TOCTOU: o instalador foi TROCADO na pasta de dados (gravável pelo usuário) depois de o agente conferir e sair → o atualizador reconfere o sha256 do plano e NÃO executa (no .deb isso atravessaria para root via pkexec); recusa, relança o anterior, saída 2")
+    void arquivoTrocadoDepoisDoPlano(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        EstadoAtualizacao estado = new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json"));
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 0));
+        PlanoAtualizacao p = plano(tmp);
+        Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
+        p.gravar(arquivoPlano);
+        Files.write(Path.of(p.artefato()), "TROCADO por outro processo do mesmo usuário".getBytes(StandardCharsets.UTF_8));
+        List<Path> relancados = new ArrayList<>();
+        ByteArrayOutputStream saida = new ByteArrayOutputStream();
+        AplicadorAtualizacao a = new AplicadorAtualizacao(new PrintStream(saida, true, StandardCharsets.UTF_8),
+                plano -> { throw new AssertionError("arquivo que não confere NUNCA pode ser executado"); },
+                relancados::add, Duration.ofSeconds(2));
+        assertThat(a.aplicar(arquivoPlano)).isEqualTo(Main.SAIDA_FALHA);
+        assertThat(saida.toString(StandardCharsets.UTF_8)).contains("sha256");
+        assertThat(relancados).containsExactly(tmp.resolve("bin/AgroEase-Agente-Impressao"));
+        assertThat(estado.ler().recusada()).map(EstadoAtualizacao.Recusada::versao).contains("9.9.9");
+    }
+
+    @Test
+    @DisplayName("o atualizador SEGURA a trava de instância enquanto instala e só a solta para relançar: um agente aberto no meio (atalho, keepalive, Run) cai na 2ª instância e sai sem tocar em nada — antes ele subia o binário VELHO, reabilitava o keepalive e prendia os arquivos que o instalador ia trocar")
+    void seguraATravaDuranteAInstalacao(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        dirs.garantir();
+        PlanoAtualizacao p = plano(tmp);
+        Path arquivoPlano = dirs.atualizacao().resolve("plano.json");
+        p.gravar(arquivoPlano);
+        List<String> visto = new ArrayList<>();
+        AplicadorAtualizacao a = new AplicadorAtualizacao(new PrintStream(new ByteArrayOutputStream()),
+                plano -> {
+                    try (var t = TravaDeInstancia.tentar(dirs.lock()).orElse(null)) {
+                        visto.add("instalando:trava " + (t == null ? "TOMADA" : "livre"));
+                    } catch (java.io.IOException e) {
+                        visto.add("instalando:erro " + e);
+                    }
+                    return new AplicadorAtualizacao.Instalador.Resultado(true, "ok", Optional.empty());
+                },
+                launcher -> {
+                    try (var t = TravaDeInstancia.tentar(dirs.lock()).orElse(null)) {
+                        visto.add("relancando:trava " + (t == null ? "TOMADA" : "livre"));
+                    }
+                }, Duration.ofSeconds(2), plano -> visto.add("pausar"));
+        assertThat(a.aplicar(arquivoPlano)).isZero();
+        assertThat(visto).containsExactly("pausar", "instalando:trava TOMADA", "relancando:trava livre");
     }
 }

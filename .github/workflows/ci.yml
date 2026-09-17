@@ -362,13 +362,13 @@ jobs:
                      test -f "$ANT" || { echo "GuardaAnterior não guardou o instalador da versão atual"; exit 1; }
                      [ "$(sha256sum < "$ANT" | cut -d' ' -f1)" = "$(sha256sum < "$EXE" | cut -d' ' -f1)" ] && echo "anterior guardado OK (sha igual ao .exe instalado)"
                      grep -q "Agente novo relançado" "$SMK/dados/atualizacao/atualizador.log" || { echo "atualizador não relançou o agente"; exit 1; }
-                     echo "== 6b) Windows (F6-L3): REVERSÃO real — a 9.9.9 não confirma saúde (não pareada) → no 2º boot a sentinela entrega a volta ao atualizador de fora, que reinstala o $V pelo MSI guardado (downgrade) — o MSI nunca roda de dentro do agente instalado"
+                     echo "== 6b) Windows (F6-L3): REVERSÃO real — a 9.9.9 não confirma saúde (não pareada) → no 3º boot sem confirmação (Fecho F6: o 2º ainda tenta) a sentinela entrega a volta ao atualizador de fora, que reinstala o $V pelo MSI guardado (downgrade) — o MSI nunca roda de dentro do agente instalado"
                      matar_agente() { MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME.exe" >/dev/null 2>&1 || true; MSYS_NO_PATHCONV=1 taskkill /F /IM "$NOME-cli.exe" >/dev/null 2>&1 || true; sleep 2; }
                      matar_agente   # o agente 9.9.9 relançado (1º boot, fica aberto sem confirmar) segura o lock e a pasta instalada
                      export JAVA_TOOL_OPTIONS="-Duser.home=$SMK_JVM/home -Dagente.release.manifesto.url=http://127.0.0.1:8770/latest.json -Dagente.release.chave.publica=$PUB"
                      : > "$SMK/dados/atualizacao/atualizador.log"
                      REVERTEU=0
-                     for boot in 1 2 3; do
+                     for boot in 1 2 3 4; do   # o relançado pelo atualizador foi o 1º boot; o laço dá o 2º (tenta, ~90 s) e o 3º (reverte)
                        echo "--- boot $boot da 9.9.9"; cat "$SMK/dados/atualizacao/estado.json" || true
                        set +e; timeout 90 "$CLI" --sem-bandeja; COD=$?; set -e
                        echo "saída do agente: $COD"

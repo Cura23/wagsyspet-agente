@@ -215,6 +215,10 @@ class AgenteDesktopAtualizacaoTest {
         assertThat(pausas.get()).isEqualTo(1);
         assertThat(retomadas.get()).isEqualTo(1);
         assertThat(codigo.isDone()).as("segue servindo na versão atual").isFalse();
+        // Fecho F6: a falha do lançador CONTA como tentativa e entra no recuo de 24 h — antes o agente tentava de novo a cada ~5 min
+        EstadoAtualizacao.Estado depois = new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json")).ler();
+        assertThat(depois.recusada()).map(EstadoAtualizacao.Recusada::versao).contains("9.9.9");
+        assertThat(d.atualizacaoDisponivel()).as("nada 'pronto' para aplicar de novo daqui a 5 min").isEmpty();
         d.sair();
         codigo.get(10, TimeUnit.SECONDS);
     }
@@ -236,7 +240,7 @@ class AgenteDesktopAtualizacaoTest {
     }
 
     @Test
-    @DisplayName("boot com emAplicacao pendente: 1ª vez sobe e CONFIRMA após o prazo de saúde (estado limpo); 2ª vez sem confirmação → reverte e sai 5")
+    @DisplayName("boot com emAplicacao pendente: 1ª vez sobe e CONFIRMA após o prazo de saúde (estado limpo); 3ª vez sem confirmação → reverte e sai 5 (o 2º boot ainda tenta — Fecho F6)")
     void sentinelaDeBoot(@TempDir Path tmp) throws Exception {
         DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
         parear(dirs);
@@ -254,8 +258,8 @@ class AgenteDesktopAtualizacaoTest {
         novo.sair();
         assertThat(codigo.get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
 
-        // agora simula: aplicou, o novo NÃO confirmou (tentativasBoot já = 1) → este boot é o 2º → reverter e sair 5
-        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 1));
+        // agora simula: aplicou, o novo NÃO confirmou em 2 boots (tentativasBoot já = 2) → este boot é o 3º → reverter e sair 5
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 2));
         AgenteDesktop segundo = new AgenteDesktop(dirs, "9.9.9", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
                 Optional.of(atualizacao(dirs, "9.9.9", Duration.ofHours(1))));
         assertThat(segundo.executar()).isEqualTo(AgenteDesktop.SAIDA_REVERTIDA);
@@ -283,7 +287,8 @@ class AgenteDesktopAtualizacaoTest {
     private static final class UiFalsa implements br.com.wagner.wagsyspet.agente.app.ui.Superficie {
         final java.util.List<String> fatais = new java.util.concurrent.CopyOnWriteArrayList<>();
         @Override public void estado(String titulo, String detalhe, boolean pareado) { }
-        @Override public void aviso(String titulo, String mensagem) { }
+        final java.util.List<String> avisos = new java.util.concurrent.CopyOnWriteArrayList<>();
+        @Override public void aviso(String titulo, String mensagem) { avisos.add(mensagem); }
         @Override public void erro(String titulo, String mensagem) { }
         @Override public void erroFatal(String titulo, String mensagem) { fatais.add(mensagem); }
     }
@@ -326,7 +331,7 @@ class AgenteDesktopAtualizacaoTest {
         DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
         parear(dirs);
         EstadoAtualizacao estado = new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json"));
-        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 1));
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()), 2));
         AgenteDesktop.Atualizacao base = atualizacao(dirs, "9.9.9", Duration.ofHours(1));
         br.com.wagner.wagsyspet.agente.core.atualizacao.Reversor adiado = new br.com.wagner.wagsyspet.agente.core.atualizacao.Reversor() {
             @Override public boolean reverter(EstadoAtualizacao.EmAplicacao ap) { revertido.set(ap); return true; }
@@ -339,5 +344,55 @@ class AgenteDesktopAtualizacaoTest {
         EstadoAtualizacao.Estado e = estado.ler();
         assertThat(e.emAplicacao()).as("o atualizador precisa dele para reconhecer o plano invertido e fechar o estado").isPresent();
         assertThat(e.recusada()).as("ainda não reverteu de verdade").isEmpty();
+    }
+
+    // ---------- Fecho F6: instalador que NÃO aplica sozinho (Linux .deb pede a senha de administrador) ----------
+
+    @Test
+    @DisplayName("instalador ASSISTIDO (Linux .deb): ocioso NÃO aplica sozinho — o agente não derruba a si mesmo para o dpkg recusar o AUTO, o download fica esperando o CLIQUE e o aviso diz a verdade ('clique em Atualizar… pede a senha'); o clique aplica")
+    void instaladorAssistidoNaoAplicaSozinho(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        parear(dirs);
+        AgenteDesktop.Atualizacao base = atualizacao(dirs, "1.0.0-teste", Duration.ofMillis(200));
+        AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
+                Optional.of(base.assistida()));
+        UiFalsa ui = new UiFalsa();
+        d.ui(ui);
+        CompletableFuture<Integer> codigo = executar(d);
+        long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (d.atualizacaoDisponivel().isEmpty() && System.nanoTime() < limite) { Thread.sleep(50); }
+        assertThat(d.atualizacaoDisponivel()).contains("9.9.9");
+
+        Thread.sleep(1200); // ocioso há MUITO mais que os 200 ms mínimos, com a verificação de 100 em 100 ms
+        assertThat(planoLancado.get()).as("assistido: nunca aplica por ociosidade").isNull();
+        assertThat(codigo.isDone()).isFalse();
+        assertThat(d.atualizacaoDisponivel()).as("o download continua esperando o clique").contains("9.9.9");
+        assertThat(ui.avisos).anySatisfy(a -> assertThat(a).contains("9.9.9").contains("Atualizar").containsIgnoringCase("senha"));
+        assertThat(ui.avisos).noneSatisfy(a -> assertThat(a).containsIgnoringCase("se atualiza sozinho"));
+
+        d.atualizarAgora(); // o clique é o ÚNICO caminho
+        assertThat(codigo.get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
+        assertThat(PlanoAtualizacao.ler(planoLancado.get()).gatilho()).isEqualTo(PlanoAtualizacao.Gatilho.MANUAL);
+    }
+
+    @Test
+    @DisplayName("versão que ESGOTOU as tentativas nesta máquina: o lojista é avisado (1×/dia) de que ela precisa ser instalada à mão — antes ninguém sabia que o update falhava")
+    void avisaQuandoEsgota(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        parear(dirs);
+        new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json")).gravar(EstadoAtualizacao.Estado.VAZIO
+                .comRecusada(new EstadoAtualizacao.Recusada("9.9.9", Instant.now().minus(Duration.ofDays(2)), GerenteAtualizacao.TENTATIVAS_POR_VERSAO)));
+        AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
+                Optional.of(atualizacao(dirs, "1.0.0-teste", Duration.ofMillis(200))));
+        UiFalsa ui = new UiFalsa();
+        d.ui(ui);
+        CompletableFuture<Integer> codigo = executar(d);
+        long limite = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (ui.avisos.isEmpty() && System.nanoTime() < limite) { Thread.sleep(50); }
+        assertThat(ui.avisos).anySatisfy(a -> assertThat(a).contains("9.9.9").containsIgnoringCase("não instalou"));
+        assertThat(d.atualizacaoDisponivel()).isEmpty();
+        assertThat(planoLancado.get()).isNull();
+        d.sair();
+        codigo.get(10, TimeUnit.SECONDS);
     }
 }

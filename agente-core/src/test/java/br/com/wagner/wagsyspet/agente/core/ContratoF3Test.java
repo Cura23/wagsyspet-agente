@@ -559,6 +559,32 @@ class ContratoF3Test {
         }
 
         @Test
+        @DisplayName("Fecho F6 — impressora FORA (desligada, fila parada, ou já com um pulso de gaveta preso na fila): o pulso da gaveta NÃO é enviado — no spooler ele ficaria guardado e a gaveta abriria SOZINHA quando a impressora voltasse, uma vez por venda acumulada, sem ninguém no balcão. imprimir{gaveta:true} → o cupom segue (fica na fila, sai quando ela voltar) com avisos:['GAVETA_FALHOU']; comando ABRIR_GAVETA → erro IMPRESSORA_INDISPONIVEL; o CORTE não é bloqueado (cortar depois do cupom atrasado é o esperado)")
+        void gavetaNaoVaiParaFilaParada() throws Exception {
+            ligar(true, true);
+            impressao.impedimentoDaGaveta = "a impressora 'EPSON TM-T20' está offline";
+            ClienteTeste c = conectarEAutenticar(ORIGIN);
+            ObjectNode pedido = JSON.createObjectNode().put("tipo", "imprimir").put("id", "v-9").put("formato", "pdf").put("bytesBase64", base64(PDF)).put("gaveta", true);
+            c.send(pedido.toString());
+            JsonNode ok = c.proximaMensagem();
+            assertThat(ok.get("tipo").asText()).isEqualTo("imprimir_ok");
+            assertThat(JSON.convertValue(ok.get("avisos"), java.util.List.class)).containsExactly("GAVETA_FALHOU");
+            esperarOrdem(2);
+            assertThat(impressao.ordem).as("sem o pulso da gaveta: só o PDF e o corte").containsExactly("pdf:AgroEase cupom v-9", "raw:AgroEase corte v-9");
+
+            impressao.ordem.clear();
+            c.send(json("tipo", "comando", "id", "g-9", "comando", "ABRIR_GAVETA"));
+            JsonNode erro = c.proximaMensagem();
+            assertThat(erro.get("tipo").asText()).isEqualTo("erro");
+            assertThat(erro.get("codigo").asText()).isEqualTo("IMPRESSORA_INDISPONIVEL");
+            assertThat(impressao.ordem).isEmpty();
+
+            c.send(json("tipo", "comando", "id", "g-10", "comando", "CORTAR"));
+            assertThat(c.proximaMensagem().get("tipo").asText()).isEqualTo("comando_ok");
+            c.close();
+        }
+
+        @Test
         @DisplayName("imprimir_ok sai assim que o PDF é ACEITO — NÃO espera o corte (adversarial L5: gaveta + PDF + corte na mesma tarefa estouravam os 12 s e o PWA via ERRO com o cupom já na mão → reimpressão duplicada); o corte ainda roda na mesma thread, antes do próximo job")
         void imprimirOkNaoEsperaOCorte() throws Exception {
             ligar(false, true);

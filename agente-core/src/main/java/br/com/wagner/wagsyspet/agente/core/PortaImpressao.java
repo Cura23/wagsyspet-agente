@@ -34,6 +34,14 @@ public interface PortaImpressao {
         return new Resultado(Resultado.Estado.ERRO, impressora, "este motor de impressão não envia comandos diretos à impressora");
     }
 
+    /**
+     * Fecho F6: antes do pulso da GAVETA — por que ele NÃO deve ser enviado agora (impressora offline, fila parada, pulso já preso
+     * na fila). O spooler guarda job de impressora desligada: a gaveta abriria sozinha quando ela voltasse. Vazio = pode enviar.
+     */
+    default Optional<String> impedimentoDaGaveta(String impressora) {
+        return Optional.empty();
+    }
+
     /** Implementação real sobre a fachada por SO (Windows → PrinterJob; Linux/macOS → lp), papel do driver por padrão. */
     static PortaImpressao real() {
         Impressora impressora = Impressora.padrao();
@@ -56,6 +64,11 @@ public interface PortaImpressao {
             @Override
             public Resultado enviarRaw(byte[] bytes, String nome, String nomeJob) {
                 return impressora.enviarRaw(bytes, nome, nomeJob);
+            }
+
+            @Override
+            public Optional<String> impedimentoDaGaveta(String nome) {
+                return impressora.impedimentoDaGaveta(nome);
             }
         };
     }

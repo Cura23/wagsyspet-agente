@@ -155,7 +155,12 @@ public final class AplicadorAtualizacao {
     private int aplicar(PlanoAtualizacao plano, Path arquivoPlano, DiretoriosDoAgente dirs, EstadoAtualizacao estado, PrintStream out) {
         out.println("Atualizando " + plano.versaoAnterior() + " → " + plano.versaoNova() + " (" + plano.arquivo() + ")");
 
-        if (!esperarAgenteSair(dirs)) {
+        // Fecho F6: a trava de instância fica COM o atualizador até a hora de relançar. Qualquer agente aberto no meio da
+        // instalação (atalho, keepalive, Run do logon) cai no caminho de 2ª instância e sai sem tocar em nada — antes subia o
+        // binário VELHO, reabilitava a tarefa de 1 min e prendia os arquivos que o instalador ia trocar. E se este processo
+        // morrer, a trava morre junto: o keepalive traz o agente de volta.
+        Optional<Optional<TravaDeInstancia>> trava = esperarAgenteSair(dirs);
+        if (trava.isEmpty()) {
             out.println("O agente não encerrou em " + esperaLock.toSeconds() + " s; atualização cancelada (ele segue na versão atual).");
             GerenteAtualizacao.esquecerAplicacao(estado, "agente não soltou o lock");
             apagar(arquivoPlano);
@@ -170,7 +175,20 @@ public final class AplicadorAtualizacao {
         // plano INVERTIDO = reversão entregue pela sentinela (Windows): nova do plano = anterior da troca pendente, e vice-versa
         final Optional<EstadoAtualizacao.EmAplicacao> revertendo = estado.ler().emAplicacao()
                 .filter(ap -> ap.versaoNova().equals(plano.versaoAnterior()) && plano.versaoNova().equals(ap.versaoAnterior()));
-        final Instalador.Resultado r = aplicarComSeguranca(plano);
+        final Instalador.Resultado r;
+        try {
+            r = artefatoConfere(plano) ? aplicarComSeguranca(plano)
+                    : new Instalador.Resultado(false, "o instalador em " + plano.artefato() + " não confere mais com o sha256 do plano (foi trocado depois da "
+                    + "verificação?) — NÃO executado", Optional.empty());
+        } finally {
+            if (trava.get().isPresent()) { // solta só agora: o agente que vai ser relançado precisa dela
+                try {
+                    trava.get().get().close();
+                } catch (IOException e) {
+                    log.warn("não consegui soltar a trava de instância ({}); o agente relançado pode demorar a subir", e.toString());
+                }
+            }
+        }
         apagar(arquivoPlano);
         if (revertendo.isPresent()) {
             // quem fecha o estado da reversão é quem instalou, com o resultado REAL (adversarial L3 r2)
@@ -216,25 +234,39 @@ public final class AplicadorAtualizacao {
         }
     }
 
-    private boolean esperarAgenteSair(DiretoriosDoAgente dirs) {
+    /**
+     * O último sha256 era conferido DENTRO do agente, antes de sair. Depois vêm a saída, a espera da trava (até 60 s), a pausa do
+     * supervisor, as novas tentativas do msiexec e — no .deb — o tempo de a pessoa digitar a senha: o arquivo fica numa pasta
+     * gravável pelo próprio usuário. No .deb a execução atravessa para ROOT ({@code pkexec dpkg -i}); é a única fronteira de
+     * privilégio do self-update e não pode ser cruzada sem hash. Plano sem sha (formato antigo) segue como antes.
+     */
+    private static boolean artefatoConfere(PlanoAtualizacao plano) {
+        String sha = plano.sha256();
+        return sha == null || sha.isBlank() || GerenteAtualizacao.shaConfere(Path.of(plano.artefato()), sha);
+    }
+
+    /**
+     * Vazio = o agente não saiu no prazo. Presente = pode instalar; por dentro vem a trava TOMADA (que o chamador segura até
+     * relançar) ou vazio quando o arquivo de trava é ilegível (segue sem ela, como sempre foi).
+     */
+    private Optional<Optional<TravaDeInstancia>> esperarAgenteSair(DiretoriosDoAgente dirs) {
         long limite = System.nanoTime() + esperaLock.toNanos();
         while (System.nanoTime() < limite) {
             try {
                 Optional<TravaDeInstancia> t = TravaDeInstancia.tentar(dirs.lock());
                 if (t.isPresent()) {
-                    t.get().close(); // só queríamos saber que está livre; o agente novo vai tomar o lock
-                    return true;
+                    return Optional.of(t);
                 }
                 Thread.sleep(200);
             } catch (IOException e) {
                 log.warn("lock ilegível ({}); seguindo", e.toString());
-                return true;
+                return Optional.of(Optional.empty());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return false;
+                return Optional.empty();
             }
         }
-        return false;
+        return Optional.empty();
     }
 
     private void relancar(Path launcher, String qual, PrintStream out) {

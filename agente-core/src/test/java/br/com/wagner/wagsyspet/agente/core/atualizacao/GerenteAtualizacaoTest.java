@@ -172,14 +172,15 @@ class GerenteAtualizacaoTest {
     }
 
     @Test
-    @DisplayName("2º boot sem confirmação → REVERTER; marcarRevertida grava recusada (24 h) e limpa emAplicacao; versão recusada não é rebaixada")
+    @DisplayName("3º boot sem confirmação → REVERTER (o 2º ainda tenta: um 1º boot SAUDÁVEL interrompido antes dos 60 s — desligaram o PC ao fechar a loja — não pode reverter uma versão boa na manhã seguinte); marcarRevertida grava recusada (24 h) e limpa emAplicacao; versão recusada não é rebaixada")
     void bootReverte(@TempDir Path tmp) throws Exception {
         GerenteAtualizacao velho = gerente(tmp, "1.0.0");
         velho.verificar();
         velho.prepararAplicacao("1.0.0", Optional.empty(), ManifestoRelease.FormatoInstalado.INSTALADOR);
         GerenteAtualizacao novo = gerente(tmp, "1.1.0");
-        assertThat(novo.avaliarBoot()).isEqualTo(GerenteAtualizacao.DecisaoBoot.AGUARDAR_CONFIRMACAO); // crashou antes de confirmar…
-        assertThat(novo.avaliarBoot()).isEqualTo(GerenteAtualizacao.DecisaoBoot.REVERTER);            // …e o supervisor relançou
+        assertThat(novo.avaliarBoot()).isEqualTo(GerenteAtualizacao.DecisaoBoot.AGUARDAR_CONFIRMACAO); // 1º boot: caiu (ou desligaram o PC) antes de confirmar…
+        assertThat(novo.avaliarBoot()).isEqualTo(GerenteAtualizacao.DecisaoBoot.AGUARDAR_CONFIRMACAO); // …o 2º boot AINDA tenta confirmar (keepalive de 1 min: custa 1 min a mais se for ruim de verdade)…
+        assertThat(novo.avaliarBoot()).isEqualTo(GerenteAtualizacao.DecisaoBoot.REVERTER);            // …só o 3º desiste
         EstadoAtualizacao.EmAplicacao ap = novo.emAplicacao().orElseThrow();
         novo.marcarRevertida(ap, "não escutou em 60 s");
         EstadoAtualizacao.Estado e = novo.estado().ler();
@@ -225,5 +226,69 @@ class GerenteAtualizacaoTest {
         assertThat(e.confirmadaEm()).isEmpty();
         assertThat(e.recusada()).map(EstadoAtualizacao.Recusada::versao).contains("1.1.0");
         assertThat(e.emAplicacao()).isEmpty();
+    }
+
+    // ---------- Fecho F6: freio das tentativas (D4 prometia "24 h / 3 tentativas"; o contador era gravado e NUNCA lido) ----------
+
+    /** Uma rodada de falha completa: baixa, prepara, o instalador falha e a versão é recusada por 24 h. */
+    private void falharUmaVez(Path tmp) throws Exception {
+        GerenteAtualizacao g = gerente(tmp, "1.0.0");
+        assertThat(g.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+        g.prepararAplicacao("1.0.0", Optional.empty(), ManifestoRelease.FormatoInstalado.INSTALADOR);
+        g.marcarRevertida(g.emAplicacao().orElseThrow(), "msiexec 1603");
+        agora = agora.plus(Duration.ofHours(25));
+    }
+
+    @Test
+    @DisplayName("TETO: a MESMA versão que falhou 3 vezes aqui não é tentada de novo — nem depois de 24 h, nem de 30 dias (sem o teto era download + saída do agente + instalador TODO DIA, para sempre); versão MAIOR zera o teto")
+    void tetoDeTentativas(@TempDir Path tmp) throws Exception {
+        falharUmaVez(tmp);
+        falharUmaVez(tmp);
+        falharUmaVez(tmp);
+        assertThat(gerente(tmp, "1.0.0").estado().ler().recusada().orElseThrow().tentativas()).isEqualTo(3);
+
+        downloadsInstalador.set(0);
+        GerenteAtualizacao g = gerente(tmp, "1.0.0");
+        assertThat(g.verificar()).isEqualTo(GerenteAtualizacao.Situacao.ADIADO);
+        agora = agora.plus(Duration.ofDays(30));
+        assertThat(g.verificar()).isEqualTo(GerenteAtualizacao.Situacao.ADIADO);
+        assertThat(downloadsInstalador.get()).as("esgotou: não baixa mais ESTA versão").isZero();
+        assertThat(g.esgotada()).contains("1.1.0");
+        assertThat(GerenteAtualizacao.resumo(g.estado(), relogio)).contains("1.1.0").contains("3 tentativas");
+
+        publicar("1.2.0"); // o dono publicou a correção: versão MAIOR é outra história
+        assertThat(g.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+        assertThat(g.esgotada()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("o contador é POR VERSÃO nos dois caminhos de recusa: 2 falhas da 1.1.0 não contam contra a 1.2.0 (inclusive na recusa do confirmar(), que somava a de outra versão)")
+    void tentativasNaoVazamEntreVersoes(@TempDir Path tmp) throws Exception {
+        falharUmaVez(tmp);
+        falharUmaVez(tmp);
+        publicar("1.2.0");
+        GerenteAtualizacao g = gerente(tmp, "1.0.0");
+        assertThat(g.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+        g.prepararAplicacao("1.0.0", Optional.empty(), ManifestoRelease.FormatoInstalado.INSTALADOR);
+        gerente(tmp, "1.0.0").confirmar(); // o agente ANTIGO subiu de novo: o atualizador não aplicou → recusa pela via do confirmar()
+        EstadoAtualizacao.Recusada r = g.estado().ler().recusada().orElseThrow();
+        assertThat(r.versao()).isEqualTo("1.2.0");
+        assertThat(r.tentativas()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("lançador do atualizador que FALHA (sem espaço para copiar o app-image, antivírus) conta como tentativa e entra no recuo de 24 h — antes só limpava o estado e o agente tentava de novo a cada ~5 min, derrubando as conexões do PDV a cada vez")
+    void lancadorQueFalhaEntraNoRecuo(@TempDir Path tmp) throws Exception {
+        GerenteAtualizacao g = gerente(tmp, "1.0.0");
+        g.verificar();
+        g.prepararAplicacao("1.0.0", Optional.empty(), ManifestoRelease.FormatoInstalado.INSTALADOR);
+
+        g.abortarAplicacao("sem espaço em disco");
+
+        EstadoAtualizacao.Estado e = g.estado().ler();
+        assertThat(e.emAplicacao()).isEmpty();
+        assertThat(e.recusada()).map(EstadoAtualizacao.Recusada::versao).contains("1.1.0");
+        assertThat(g.podeAplicar(true, Duration.ofHours(1))).as("nada de tentar de novo em 5 min").isFalse();
+        assertThat(gerente(tmp, "1.0.0").verificar()).isEqualTo(GerenteAtualizacao.Situacao.ADIADO);
     }
 }

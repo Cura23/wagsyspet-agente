@@ -45,6 +45,8 @@ final class AutostartWindows implements Autostart {
     static final String INICIO_DA_REPETICAO = "2026-01-01T00:00:00";
     private static final Pattern SID = Pattern.compile("S-1-\\d+(?:-\\d+)+");
     private static final Pattern SETTINGS = Pattern.compile("<Settings>(.*?)</Settings>", Pattern.DOTALL);
+    /** Dono da tarefa no XML do {@code /query}: {@code <UserId>} do gatilho de logon / do principal (SID). */
+    private static final Pattern USER_ID = Pattern.compile("<UserId>\\s*(S-1-\\d+(?:-\\d+)+)\\s*</UserId>");
 
     private final ComandoExterno cmd;
     private final Path pastaXml;
@@ -166,12 +168,42 @@ final class AutostartWindows implements Autostart {
             return Optional.empty();
         }
         // o schtasks pode devolver o XML em UTF-16 (o ComandoExterno decodifica como UTF-8): sem os NULs as tags ASCII voltam
-        Matcher m = SETTINGS.matcher(s.texto().replace("\u0000", ""));
+        String xml = s.texto().replace("\u0000", "");
+        if (deOutroUsuario(xml)) {
+            // Fecho F6: o nome da tarefa é global na máquina. A de OUTRO usuário Windows não é a minha: tratá-la como minha fazia o
+            // meu "Sair" desabilitar o autostart DELE e a minha subida apagar o MEU Run. Para mim vale "sem tarefa" → fico no Run.
+            return Optional.empty();
+        }
+        Matcher m = SETTINGS.matcher(xml);
         return Optional.of(!(m.find() && m.group(1).replaceAll("\\s+", "").toLowerCase(java.util.Locale.ROOT).contains("<enabled>false</enabled>")));
     }
 
     /** {@code false} = schtasks indisponível/negado (o chamador cai no Run). */
+    /** A tarefa consultada pertence a OUTRO usuário? Só afirma com os dois SIDs em mãos (na dúvida, é minha — como sempre foi). */
+    private boolean deOutroUsuario(String xmlDaTarefa) {
+        Matcher dono = USER_ID.matcher(xmlDaTarefa);
+        if (!dono.find()) {
+            return false;
+        }
+        Optional<String> meu = sidDoUsuario();
+        return meu.isPresent() && !meu.get().equalsIgnoreCase(dono.group(1));
+    }
+
+    /** Existe uma tarefa com o nosso nome que é de outro usuário? (o {@code /create /f} a sobrescreveria, trocando o dono) */
+    private boolean tarefaAlheia() {
+        try {
+            ComandoExterno.Saida s = cmd.executar(List.of("schtasks", "/query", "/tn", TAREFA, "/xml"));
+            return s.ok() && deOutroUsuario(s.texto().replace("\u0000", ""));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     private boolean criarTarefa(String caminho) throws IOException {
+        if (tarefaAlheia()) {
+            log.warn("Já existe a tarefa {} de OUTRO usuário deste computador: não sobrescrevo — este usuário fica com o Run do registro (só no logon)", TAREFA);
+            return false;
+        }
         Optional<String> usuario = sidDoUsuario();
         Path xml = pastaXml.resolve(ARQUIVO_XML);
         Files.createDirectories(pastaXml);

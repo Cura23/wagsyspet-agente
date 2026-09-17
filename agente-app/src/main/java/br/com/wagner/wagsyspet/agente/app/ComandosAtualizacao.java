@@ -197,19 +197,29 @@ final class ComandosAtualizacao {
     }
 
     /**
-     * Como este binário foi instalado, pelo caminho do launcher: dentro do {@code $HOME/.local} = app-image (tar.gz, atualizável
-     * por troca de pasta); qualquer outro lugar ({@code /opt}, {@code Program Files}, {@code AppData\Local}, {@code /Applications}) ou
-     * java cru = instalador do SO.
+     * Como este binário foi instalado, pelo caminho do launcher. Só o LINUX tem dois formatos: dentro do HOME do usuário (qualquer
+     * pasta — a página manda extrair o tar.gz "em uma pasta sua") = app-image, atualizável por troca de pasta sem senha; fora do
+     * HOME ({@code /opt}, {@code /usr}) = pacote do sistema (.deb, pede senha). Windows e macOS são sempre "instalador" — lá o
+     * launcher mora dentro do HOME ({@code AppData\\Local}, {@code ~/Applications}) e isso não quer dizer app-image. Java cru
+     * (sem launcher) = instalador.
+     *
+     * <p>Fecho F6: antes só {@code ~/.local} contava como app-image. Quem seguia a instrução publicada caía no fluxo do .deb
+     * ({@code pkexec dpkg -i} num Fedora/Arch) e o tar.gz — o único formato Linux que se atualiza sozinho — nunca se atualizava.</p>
      */
     static ManifestoRelease.FormatoInstalado formatoInstalado(Optional<Path> launcher, Path home) {
-        if (launcher.isEmpty()) {
+        return formatoInstalado(launcher, home, System.getProperty("os.name", ""));
+    }
+
+    static ManifestoRelease.FormatoInstalado formatoInstalado(Optional<Path> launcher, Path home, String osName) {
+        boolean linux = osName != null && osName.toLowerCase(java.util.Locale.ROOT).contains("linux");
+        if (launcher.isEmpty() || !linux) {
             return ManifestoRelease.FormatoInstalado.INSTALADOR;
         }
         String l = launcher.get().toString().replace('\\', '/');
         String h = home.toString().replace('\\', '/');
-        if (l.startsWith(h + "/.local/")) {
-            return ManifestoRelease.FormatoInstalado.APP_IMAGE;
+        while (h.endsWith("/")) {
+            h = h.substring(0, h.length() - 1);
         }
-        return ManifestoRelease.FormatoInstalado.INSTALADOR;
+        return !h.isEmpty() && l.startsWith(h + "/") ? ManifestoRelease.FormatoInstalado.APP_IMAGE : ManifestoRelease.FormatoInstalado.INSTALADOR;
     }
 }

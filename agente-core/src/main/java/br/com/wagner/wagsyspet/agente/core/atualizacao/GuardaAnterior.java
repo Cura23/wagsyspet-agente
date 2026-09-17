@@ -142,6 +142,21 @@ public final class GuardaAnterior implements GerenteAtualizacao.GuardaDoAnterior
         return Optional.empty();
     }
 
+    /**
+     * O sha256 (hex) do instalador guardado e CONFERIDO da {@code versao} — vai no plano de reversão para o atualizador de fora
+     * reconferir o arquivo na hora de executar (Fecho F6: entre gravar o plano e o msiexec há a saída do agente e a espera da trava).
+     */
+    public static Optional<String> shaGuardado(Path pasta, String versao) {
+        if (guardado(pasta, versao).isEmpty()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Files.readAllLines(pasta.resolve(MARCADOR), StandardCharsets.UTF_8).get(2).trim());
+        } catch (IOException | RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
     /** Só ARQUIVOS da pasta (uma subpasta alheia ali não é nossa para apagar). Falha ao apagar não impede a guarda. */
     private void esvaziar() {
         if (!Files.isDirectory(pasta)) {
