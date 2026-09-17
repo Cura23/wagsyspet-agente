@@ -86,4 +86,20 @@ class ImpressoraCupsLpTest {
     void marca() {
         assertThat(ImpressoraCupsLp.PREFIXO_TEMP).containsIgnoringCase("agroease").doesNotContainIgnoringCase("wagsyspet");
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("F6-L4: o request id do lp deixa de morrer no texto do detalhe — vira o acompanhamento do job no spooler ('request id is PDF-12 (1 file(s))' → PDF-12); sem id reconhecível o acompanhamento nasce DESCONHECIDO{SEM_REGISTRO}; recusado/erro não tem acompanhamento")
+    void aceitoCarregaOAcompanhamento() {
+        var ok = ImpressoraCupsLp.interpretar(0, "request id is PDF-12 (1 file(s))", "PDF", "AgroEase cupom x", ImpressoraJavaxPrint.ModoPapel.PAPEL_DO_DRIVER);
+        org.assertj.core.api.Assertions.assertThat(ok.acompanhamento()).isPresent();
+        org.assertj.core.api.Assertions.assertThat(ok.acompanhamento().get()).isInstanceOf(br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoCups.class);
+        org.assertj.core.api.Assertions.assertThat(((br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoCups) ok.acompanhamento().get()).jobId()).isEqualTo("PDF-12");
+
+        var semId = ImpressoraCupsLp.interpretar(0, "saída que não é a do lp", "PDF", "AgroEase cupom x", ImpressoraJavaxPrint.ModoPapel.PAPEL_DO_DRIVER);
+        org.assertj.core.api.Assertions.assertThat(semId.acompanhamento().orElseThrow().consultar().motivo())
+                .isEqualTo(br.com.wagner.wagsyspet.agente.impressao.spooler.EstadoSpooler.Motivo.SEM_REGISTRO);
+
+        var recusado = ImpressoraCupsLp.interpretar(1, "lp: Error - The printer or class does not exist.", "X", "j", ImpressoraJavaxPrint.ModoPapel.PAPEL_DO_DRIVER);
+        org.assertj.core.api.Assertions.assertThat(recusado.acompanhamento()).isEmpty();
+    }
 }

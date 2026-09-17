@@ -38,8 +38,21 @@ public final class ImpressoraJavaxPrint {
     }
 
     /** Resultado honesto: "aceito pelo spooler" não é "papel saiu" (limite de qualquer spooler). */
-    public record Resultado(Estado estado, String impressora, String detalhe) {
+    /**
+     * @param acompanhamento alça para perguntar ao spooler o que aconteceu DEPOIS do aceite (F6-L4); {@code null} quando o job não
+     *                       foi aceito ou o motor não sabe acompanhar
+     */
+    public record Resultado(Estado estado, String impressora, String detalhe,
+                            br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoSpooler acompanhamentoOuNull) {
         public enum Estado { ACEITO_SPOOLER, IMPRESSORA_INDISPONIVEL, ERRO }
+
+        public Resultado(Estado estado, String impressora, String detalhe) {
+            this(estado, impressora, detalhe, null);
+        }
+
+        public java.util.Optional<br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoSpooler> acompanhamento() {
+            return java.util.Optional.ofNullable(acompanhamentoOuNull);
+        }
 
         public boolean aceito() {
             return estado == Estado.ACEITO_SPOOLER;
@@ -71,11 +84,22 @@ public final class ImpressoraJavaxPrint {
      * @param nomeJob        título do job no spooler (útil para diagnóstico; o cups-pdf usa como nome do arquivo)
      */
     public static Resultado imprimirPdf(byte[] pdf, String nomeImpressora, ModoPapel modo, String nomeJob) {
+        return imprimirPdf(pdf, nomeImpressora, modo, nomeJob, (impressora, job) -> Optional.empty());
+    }
+
+    /**
+     * @param armar F6-L4: abre o acompanhamento do job no spooler ANTES do {@code print()} (o Windows apaga o job ao imprimir — quem
+     *              só olha depois não vê nada). Vazio = sem acompanhamento; nunca pode impedir a impressão.
+     */
+    public static Resultado imprimirPdf(byte[] pdf, String nomeImpressora, ModoPapel modo, String nomeJob,
+                                        java.util.function.BiFunction<String, String, Optional<br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoSpooler>> armar) {
         Optional<PrintService> servico = localizar(nomeImpressora);
         if (servico.isEmpty()) {
             return new Resultado(Resultado.Estado.IMPRESSORA_INDISPONIVEL, nomeImpressora,
                     "Impressora não encontrada no SO. Disponíveis: " + listarImpressoras());
         }
+        br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoSpooler acompanhamento = null;
+        boolean aceito = false;
         try (PDDocument documento = Loader.loadPDF(pdf)) {
             PrinterJob job = PrinterJob.getPrinterJob();
             job.setPrintService(servico.get());
@@ -84,9 +108,15 @@ public final class ImpressoraJavaxPrint {
                 case PAPEL_DO_PDF -> job.setPageable(new PDFPageable(documento));
                 case PAPEL_DO_DRIVER -> job.setPrintable(new PDFPrintable(documento, Scaling.SHRINK_TO_FIT));
             }
+            try {
+                acompanhamento = armar.apply(servico.get().getName(), nomeJob).orElse(null);
+            } catch (RuntimeException | LinkageError e) {
+                acompanhamento = null; // o acompanhamento é um extra: a impressão segue
+            }
             job.print(); // silencioso: nenhum diálogo; lança PrinterException se o spooler recusar
+            aceito = true;
             return new Resultado(Resultado.Estado.ACEITO_SPOOLER, servico.get().getName(),
-                    "Job '" + nomeJob + "' aceito pelo spooler (" + documento.getNumberOfPages() + " pág., modo " + modo + ")");
+                    "Job '" + nomeJob + "' aceito pelo spooler (" + documento.getNumberOfPages() + " pág., modo " + modo + ")", acompanhamento);
         } catch (PrinterException e) {
             // Mensagem pode vir null (ex.: falha ao executar o spooler do SO); inclui classe + causa + 1º frame
             String causa = e.getCause() != null ? " causa=" + e.getCause() : "";
@@ -95,6 +125,10 @@ public final class ImpressoraJavaxPrint {
                     "Spooler recusou o job: " + e.getClass().getSimpleName() + "(" + e.getMessage() + ")" + causa + origem);
         } catch (IOException e) {
             return new Resultado(Resultado.Estado.ERRO, nomeImpressora, "PDF inválido: " + e.getMessage());
+        } finally {
+            if (!aceito && acompanhamento != null) {
+                acompanhamento.close(); // job recusado: solta o handle da fila e a thread que já estava olhando
+            }
         }
     }
 
