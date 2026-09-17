@@ -50,11 +50,16 @@ final class Mensagens {
         return n.toString();
     }
 
+    /** {@code comando_raw}: {@code comando{ABRIR_GAVETA|CORTAR}}, {@code imprimir{gaveta}} e {@code extras} na seleção da impressora. */
     /** {@code estado_impressao}: push {@code impressao_estado} + pull {@code consultar_impressao}; {@code atualizacao}: fecha 1001 'ATUALIZANDO'. */
     static final String ORIGEM_PUSH = "push";
     static final String ORIGEM_CONSULTA = "consulta";
 
-    static final java.util.List<String> CAPACIDADES = java.util.List.of("estado_impressao", "atualizacao");
+    static final java.util.List<String> CAPACIDADES = java.util.List.of("estado_impressao", "atualizacao", "comando_raw");
+    /** {@code comando} pedido com o opt-in desligado neste computador (ou para esta impressora). */
+    static final String COMANDO_DESABILITADO = "COMANDO_DESABILITADO";
+    static final String AVISO_GAVETA_FALHOU = "GAVETA_FALHOU";
+    static final String AVISO_CORTE_FALHOU = "CORTE_FALHOU";
 
     /**
      * {@code impressao_estado{id, origem:'push'|'consulta', estado, motivo?, detalhe, encerrado}} — o que o SPOOLER disse do job depois do aceite (F6 D9).
@@ -100,7 +105,13 @@ final class Mensagens {
     }
 
     static String impressoras(String id, List<String> nomes, String selecionada) {
+        return impressoras(id, nomes, selecionada, null);
+    }
+
+    /** {@code extras}: opt-in de gaveta/corte VALENDO para a selecionada (ausente = desligado). O parser do PWA F2 ignora campos a mais. */
+    static String impressoras(String id, List<String> nomes, String selecionada, ExtrasImpressao extras) {
         ObjectNode n = base("impressoras");
+        extras(n, extras);
         n.put("id", id);
         ArrayNode arr = n.putArray("nomes");
         nomes.forEach(arr::add);
@@ -113,17 +124,49 @@ final class Mensagens {
     }
 
     static String selecionarImpressoraOk(String id, String selecionada) {
+        return selecionarImpressoraOk(id, selecionada, null);
+    }
+
+    static String comandoOk(String id) {
+        ObjectNode n = base("comando_ok");
+        n.put("id", id);
+        return n.toString();
+    }
+
+    private static void extras(ObjectNode n, ExtrasImpressao e) {
+        if (e != null) {
+            n.putObject("extras").put("dialeto", e.dialeto().name()).put("gaveta", e.gaveta()).put("corte", e.corte())
+                    .put("gavetaPino", e.gavetaPino()).put("gavetaPulsoMs", e.gavetaPulsoMs());
+        }
+    }
+
+    static String selecionarImpressoraOk(String id, String selecionada, ExtrasImpressao extras) {
         ObjectNode n = base("selecionar_impressora_ok");
+        extras(n, extras);
         n.put("id", id);
         n.put("selecionada", selecionada);
         return n.toString();
     }
 
     static String imprimirOk(String id) {
+        return imprimirOk(id, List.of());
+    }
+
+    /** {@code avisos}: gaveta/corte que falharam — o cupom (PDF) foi aceito do mesmo jeito. Ausente quando não há. */
+    static String imprimirOk(String id, List<String> avisos) {
+        ObjectNode n = imprimirOkBase(id);
+        if (!avisos.isEmpty()) {
+            ArrayNode a = n.putArray("avisos");
+            avisos.forEach(a::add);
+        }
+        return n.toString();
+    }
+
+    private static ObjectNode imprimirOkBase(String id) {
         ObjectNode n = base("imprimir_ok");
         n.put("id", id);
         n.put("estado", ACEITO_SPOOLER);
-        return n.toString();
+        return n;
     }
 
     static String imprimirErro(String id, String codigo, String mensagem) {

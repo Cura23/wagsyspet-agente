@@ -57,6 +57,7 @@ public final class JanelaStatus implements Superficie {
         botoes.add(botao("Parear…", acoes::parear));
         botoes.add(botao("Impressora…", acoes::escolherImpressora));
         botoes.add(botao("Imprimir teste", acoes::imprimirTeste));
+        botoes.add(botao("Gaveta e corte…", acoes::gavetaECorte));
         botoes.add(botao("Ver log", acoes::verLog));
         botaoAtualizar = botao("Atualizar…", acoes::atualizar);
         botaoAtualizar.setEnabled(false);

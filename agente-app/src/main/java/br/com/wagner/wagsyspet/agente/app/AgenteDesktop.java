@@ -554,6 +554,55 @@ final class AgenteDesktop implements AcoesUi.Agente {
         atualizarEstado();
     }
 
+    // ── F6-L5: gaveta e corte pela interface do agente (loja que não usa o painel do PWA) ────────────────────────────
+
+    @Override
+    public Optional<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> extrasDaImpressora() {
+        return config.extrasAtivos();
+    }
+
+    /**
+     * A autorização é do HARDWARE que o lojista viu e testou: {@code valores.impressora()} é a impressora que o diálogo mostrava. Se a
+     * selecionada mudou com o diálogo aberto (painel do PWA, "Impressora…"), nada é testado nem ligado na outra (adversarial L5).
+     */
+    private String impressoraDoDialogo(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores, String paraQue) throws IOException {
+        String selecionada = config.impressoraSelecionada().orElseThrow(() -> new IOException("Escolha a impressora deste computador antes " + paraQue));
+        if (!selecionada.equals(valores.impressora())) {
+            throw new IOException("A impressora deste computador mudou para '" + selecionada + "'. Abra \"Gaveta e corte…\" de novo.");
+        }
+        return selecionada;
+    }
+
+    @Override
+    public void configurarExtras(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao pedido) throws IOException {
+        String impressora = impressoraDoDialogo(pedido, "de ligar a gaveta ou o corte");
+        var extras = new br.com.wagner.wagsyspet.agente.core.ExtrasImpressao(impressora, pedido.dialeto(), pedido.gaveta(), pedido.corte(), pedido.gavetaPino(), pedido.gavetaPulsoMs());
+        config.extras(extras.algumLigado() ? extras : null);
+        log.info("Gaveta/corte configurados pela interface para '{}': dialeto={} gaveta={} corte={} pino={} pulso={} ms",
+                impressora, extras.dialeto(), extras.gaveta(), extras.corte(), extras.gavetaPino(), extras.gavetaPulsoMs());
+    }
+
+    /** "Testar": manda os bytes do catálogo com os valores do DIÁLOGO, sem ligar nada — liga-se só depois de ver o efeito físico. */
+    @Override
+    public String testarGaveta(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores) throws IOException {
+        return testarRaw(valores, "gaveta", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.abrirGaveta(valores.dialeto(), valores.gavetaPino(), valores.gavetaPulsoMs()));
+    }
+
+    @Override
+    public String testarCorte(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores) throws IOException {
+        return testarRaw(valores, "corte", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.cortar(valores.dialeto()));
+    }
+
+    private String testarRaw(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores, String qual, byte[] bytes) throws IOException {
+        String impressora = impressoraDoDialogo(valores, "do teste");
+        Resultado r = impressao.enviarRaw(bytes, impressora, "AgroEase " + qual + " teste");
+        log.info("Teste de {} pela interface em '{}' → {} ({})", qual, impressora, r.estado(), r.detalhe());
+        if (!r.aceito()) {
+            throw new IOException("A impressora '" + impressora + "' não aceitou o comando. Confira se está ligada. Detalhe no log.");
+        }
+        return "Comando enviado para " + impressora + ".";
+    }
+
     Resultado imprimirTesteResultado() throws IOException {
         String impressora = config.impressoraSelecionada().orElseThrow(() -> new IOException("Escolha a impressora deste computador antes do teste"));
         byte[] pdf = PdfTeste.cupom80mm(Main.NOME_PRODUTO, versao + " · teste pela bandeja");

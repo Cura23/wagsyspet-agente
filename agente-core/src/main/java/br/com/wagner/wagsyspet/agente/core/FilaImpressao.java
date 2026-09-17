@@ -45,6 +45,18 @@ final class FilaImpressao implements AutoCloseable {
         }
     }
 
+    /**
+     * Job em dois tempos (F6-L5): {@link #principal()} decide a resposta ao PWA; {@link #depois(Resultado)} roda logo em seguida na MESMA
+     * thread (antes do próximo job — a ordem no spooler se mantém), mas DEPOIS de responder. É onde mora o corte do papel: ele não
+     * pode atrasar o {@code imprimir_ok} de um cupom já aceito (gaveta + PDF + corte numa tarefa só estouravam o prazo — adversarial L5).
+     */
+    interface Job {
+        Resultado principal() throws Exception;
+
+        default void depois(Resultado principal) {
+        }
+    }
+
     /** Job rodando há mais que {@code prazo × FATOR_MOTOR_PRESO} = motor de impressão travado (spooler/CUPS pendurado). */
     static final int FATOR_MOTOR_PRESO = 10;
 
@@ -65,28 +77,18 @@ final class FilaImpressao implements AutoCloseable {
     }
 
     void submeter(String descricao, Callable<Resultado> job, Resposta resposta) {
+        submeterEmDoisTempos(descricao, job::call, resposta);
+    }
+
+    /** Como {@link #submeter}, com o pós-resposta do {@link Job} (nome próprio: uma lambda serviria às duas sobrecargas). */
+    void submeterEmDoisTempos(String descricao, Job job, Resposta resposta) {
         AtomicBoolean respondido = new AtomicBoolean(false);
         Runnable tarefa = () -> {
-            Resultado r;
             executandoDesdeNanos = System.nanoTime();
             try {
-                r = job.call();
-            } catch (Exception | Error e) {
-                log.error("Impressão {} lançou {}", descricao, e.toString());
-                r = new Resultado(Resultado.Estado.ERRO, "", "exceção no motor: " + e);
+                executar(descricao, job, resposta, respondido);
             } finally {
                 executandoDesdeNanos = 0;
-            }
-            if (respondido.compareAndSet(false, true)) {
-                resposta.concluido(r);
-            } else {
-                log.warn("Impressão {} concluiu DEPOIS do prazo de {} ({} — {}); o PWA já recebeu ERRO — possível duplicata se reimprimir",
-                        descricao, prazo, r.estado(), r.detalhe());
-                try {
-                    resposta.concluidoTarde(r);
-                } catch (RuntimeException e) {
-                    log.warn("concluidoTarde de {} falhou: {}", descricao, e.toString());
-                }
             }
         };
         try {
@@ -101,6 +103,32 @@ final class FilaImpressao implements AutoCloseable {
                 resposta.prazoEstourado();
             }
         }, prazo.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    private void executar(String descricao, Job job, Resposta resposta, AtomicBoolean respondido) {
+        Resultado r;
+        try {
+            r = job.principal();
+        } catch (Exception | Error e) {
+            log.error("Impressão {} lançou {}", descricao, e.toString());
+            r = new Resultado(Resultado.Estado.ERRO, "", "exceção no motor: " + e);
+        }
+        if (respondido.compareAndSet(false, true)) {
+            resposta.concluido(r);
+        } else {
+            log.warn("Impressão {} concluiu DEPOIS do prazo de {} ({} — {}); o PWA já recebeu ERRO — possível duplicata se reimprimir",
+                    descricao, prazo, r.estado(), r.detalhe());
+            try {
+                resposta.concluidoTarde(r);
+            } catch (RuntimeException e) {
+                log.warn("concluidoTarde de {} falhou: {}", descricao, e.toString());
+            }
+        }
+        try {
+            job.depois(r);
+        } catch (RuntimeException | Error e) {
+            log.warn("Pós-impressão de {} falhou: {}", descricao, e.toString());
+        }
     }
 
     /** Há um job dentro do motor agora. */

@@ -48,6 +48,7 @@ public final class Bandeja implements Superficie {
         menu.add(item("Parear…", acoes::parear));
         menu.add(item("Impressora…", acoes::escolherImpressora));
         menu.add(item("Imprimir teste", acoes::imprimirTeste));
+        menu.add(item("Gaveta e corte…", acoes::gavetaECorte));
         menu.add(item("Ver log", acoes::verLog));
         itemAtualizar = item("Atualizar…", acoes::atualizar);
         itemAtualizar.setEnabled(false);

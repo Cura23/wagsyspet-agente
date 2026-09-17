@@ -103,6 +103,41 @@ public final class ImpressoraCupsLp {
         return List.of(LP.toString(), "-d", nomeImpressora, "-t", nomeJob, "-o", "nopdfAutoRotate");
     }
 
+    /** {@code lp -d <fila> -t <job> -o raw}: o libcups força {@code application/vnd.cups-raw} — nenhum filtro/driver toca os bytes. */
+    static List<String> comandoLpRaw(String nomeImpressora, String nomeJob) {
+        return List.of(LP.toString(), "-d", nomeImpressora, "-t", nomeJob, "-o", "raw");
+    }
+
+    /** Curto: a gaveta vem ANTES do PDF e divide com ele o prazo da fila do agente (12 s). */
+    static final int PRAZO_LP_RAW_SEGUNDOS = 2;
+
+    /** F6-L5: bytes crus (gaveta/corte) como job separado na MESMA fila do cupom. Sem acompanhamento: o que importa é o PDF. */
+    public static Resultado enviarRaw(byte[] bytes, String nomeImpressora, String nomeJob) {
+        if (!disponivel()) {
+            return new Resultado(Resultado.Estado.ERRO, nomeImpressora, "/usr/bin/lp ausente (instale cups-client)");
+        }
+        Path tmp = null;
+        try {
+            tmp = Files.createTempFile("agroease-raw-", ".bin");
+            Files.write(tmp, bytes);
+            List<String> cmd = new ArrayList<>(comandoLpRaw(nomeImpressora, nomeJob));
+            cmd.add(tmp.toString());
+            Resultado r = executar(cmd, Duration.ofSeconds(PRAZO_LP_RAW_SEGUNDOS), nomeImpressora, nomeJob, ModoPapel.PAPEL_DO_DRIVER);
+            r.acompanhamento().ifPresent(a -> a.close());
+            return new Resultado(r.estado(), r.impressora(), r.detalhe());
+        } catch (IOException e) {
+            return new Resultado(Resultado.Estado.ERRO, nomeImpressora, "Falha ao preparar o comando para o lp: " + e.getMessage());
+        } finally {
+            if (tmp != null) {
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ignored) {
+                    /* temp file — melhor esforço */
+                }
+            }
+        }
+    }
+
     /** Roda o comando com prazo REAL: stdout lido em thread própria; estourou → mata o processo e devolve ERRO. */
     static Resultado executar(List<String> cmd, Duration prazo, String nomeImpressora, String nomeJob, ModoPapel modo) {
         ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);

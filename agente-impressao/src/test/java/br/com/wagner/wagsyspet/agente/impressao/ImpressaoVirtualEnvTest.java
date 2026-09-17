@@ -90,6 +90,26 @@ class ImpressaoVirtualEnvTest {
         }
     }
 
+    @Test
+    @DisplayName("F6-L5 RAW no spooler REAL: o comando de gaveta do catálogo vai como job SEPARADO. Linux/macOS (lp -o raw): tem de ser ACEITO — e fica fixado o fato de que o spooler diz 'sucesso' mesmo para impressora que não é ESC/POS (por isso o opt-in + Testar). Windows (javax.print AUTOSENSE → pDatatype RAW): o resultado é REGISTRADO; nunca pode lançar")
+    void rawNoSpoolerReal() {
+        byte[] gaveta = br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.abrirGaveta(br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESCPOS, 2, 50);
+        var r = impressora.enviarRaw(gaveta, virtual, "AgroEase gaveta ci-" + UUID.randomUUID().toString().substring(0, 8));
+        System.out.println("[RAW] SO=" + impressora.sistema() + " → " + r);
+        assertThat(r).isNotNull();
+        if (impressora.sistema() != Impressora.Sistema.WINDOWS) {
+            assertThat(r.aceito()).as("lp -o raw deve ser aceito pelo CUPS: %s", r.detalhe()).isTrue();
+            assertThat(r.acompanhamento()).as("comando cru não é observado: o que importa é o PDF").isEmpty();
+        } else if (virtual.toLowerCase().contains("print to pdf")) {
+            // "Microsoft Print to PDF" é driver v4 (XPS): RAW seria descartado em silêncio → o agente tem de dizer ERRO, não "sucesso".
+            // Prova em Windows REAL a detecção pelo registro (…\\Drivers\\Version-4\\<driver>) — adversarial L5
+            assertThat(r.aceito()).as("driver v4 não aceita comando direto: %s", r.detalhe()).isFalse();
+            assertThat(r.detalhe()).containsIgnoringCase("v4");
+        }
+        var inexistente = impressora.enviarRaw(gaveta, "IMPRESSORA_QUE_NAO_EXISTE_" + UUID.randomUUID(), "AgroEase gaveta x");
+        assertThat(inexistente.aceito()).isFalse();
+    }
+
     private void imprimirEVerificar(ModoPapel modo) throws Exception {
         String job = "wagsyspet-ci-" + modo.name().toLowerCase() + "-" + UUID.randomUUID().toString().substring(0, 8);
         byte[] pdf = PdfDeTeste.cupom80mm(100,

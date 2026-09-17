@@ -241,6 +241,53 @@ class AgenteDesktopTest {
     }
 
 
+
+    @Test
+    @DisplayName("F6-L5 pela INTERFACE do agente (loja que não usa o painel do PWA): 'Testar gaveta/corte' manda os bytes do catálogo com os valores do DIÁLOGO, antes de ligar nada (liga-se só depois de ver a gaveta abrir); salvar grava o opt-in para a impressora SELECIONADA; sem impressora escolhida → erro claro; falha do spooler → erro claro")
+    void gavetaECortePelaInterface(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        java.util.List<String> raws = new java.util.ArrayList<>();
+        java.util.concurrent.atomic.AtomicBoolean falhar = new java.util.concurrent.atomic.AtomicBoolean();
+        PortaImpressao motor = new PortaImpressao() {
+            @Override public java.util.List<String> listar() { return java.util.List.of("EPSON", "PDF"); }
+            @Override public java.util.Optional<String> padrao() { return java.util.Optional.of("EPSON"); }
+            @Override public br.com.wagner.wagsyspet.agente.impressao.ImpressoraJavaxPrint.Resultado imprimir(byte[] pdf, String impressora, String nomeJob) { throw new AssertionError("não é PDF"); }
+            @Override public br.com.wagner.wagsyspet.agente.impressao.ImpressoraJavaxPrint.Resultado enviarRaw(byte[] bytes, String impressora, String nomeJob) {
+                raws.add(impressora + "|" + nomeJob + "|" + java.util.HexFormat.ofDelimiter(" ").withUpperCase().formatHex(bytes));
+                return new br.com.wagner.wagsyspet.agente.impressao.ImpressoraJavaxPrint.Resultado(falhar.get()
+                        ? br.com.wagner.wagsyspet.agente.impressao.ImpressoraJavaxPrint.Resultado.Estado.ERRO
+                        : br.com.wagner.wagsyspet.agente.impressao.ImpressoraJavaxPrint.Resultado.Estado.ACEITO_SPOOLER, impressora, "fake");
+            }
+        };
+        AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{0}, new PrintStream(new ByteArrayOutputStream()), motor);
+        var bema = new br.com.wagner.wagsyspet.agente.core.ExtrasImpressao("EPSON", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.ESC_BEMA, true, true, 2, 100);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.testarGaveta(bema)).hasMessageContaining("Escolha a impressora");
+        d.selecionarImpressora("EPSON");
+        assertThat(d.extrasDaImpressora()).as("default: desligado").isEmpty();
+
+        d.testarGaveta(bema);
+        d.testarCorte(bema);
+        assertThat(raws).containsExactly("EPSON|AgroEase gaveta teste|1B 76 64", "EPSON|AgroEase corte teste|0A 0A 0A 0A 1B 6D");
+        assertThat(d.extrasDaImpressora()).as("testar NÃO liga nada").isEmpty();
+
+        d.configurarExtras(bema);
+        var salvo = d.extrasDaImpressora().orElseThrow();
+        assertThat(salvo.impressora()).isEqualTo("EPSON");
+        assertThat(salvo.dialeto().name()).isEqualTo("ESC_BEMA");
+        assertThat(Files.readString(dirs.config())).contains("\"extras\"").contains("\"gavetaPulsoMs\" : 100");
+
+        falhar.set(true);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.testarGaveta(bema)).hasMessageContaining("não aceitou");
+
+        d.selecionarImpressora("PDF");
+        assertThat(d.extrasDaImpressora()).as("trocar de impressora zera").isEmpty();
+        // a impressora mudou com o diálogo (da EPSON) ainda aberto: nem testar nem ligar na impressora que o lojista NÃO viu/testou
+        falhar.set(false);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.configurarExtras(bema)).hasMessageContaining("mudou");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> d.testarCorte(bema)).hasMessageContaining("mudou");
+        assertThat(d.extrasDaImpressora()).isEmpty();
+    }
     @Test
     @DisplayName("2ª instância disparada pelo Agendador (--keepalive, a cada 1 min no Windows) com o agente já aberto → sai 0 MUDA: sem mensagem, sem diálogo, sem tocar o log; sem a flag (clique humano) continua avisando")
     void segundaInstanciaDoKeepaliveSaiMuda(@TempDir Path tmp) throws Exception {
