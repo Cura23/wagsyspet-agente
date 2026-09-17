@@ -20,6 +20,7 @@ import java.util.Properties;
 import java.time.Clock;
 import br.com.wagner.wagsyspet.agente.core.atualizacao.EstadoAtualizacao;
 import br.com.wagner.wagsyspet.agente.core.atualizacao.GerenteAtualizacao;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.GuardaAnterior;
 import br.com.wagner.wagsyspet.agente.core.atualizacao.LancadorAtualizador;
 import br.com.wagner.wagsyspet.agente.core.pareamento.DiretoriosDoAgente;
 
@@ -103,12 +104,22 @@ final class ComandosAtualizacao {
 
     /** O gerente do self-update com a configuração embutida (manifesto do GitHub, chaves atual+reserva, formato pelo launcher). */
     static GerenteAtualizacao gerentePadrao(DiretoriosDoAgente dirs, String versaoAtual) {
-        Properties props = System.getProperties();
-        URI manifesto = urlManifesto(props);
-        ClienteRelease cliente = new ClienteRelease(manifesto, PRAZO, versaoAtual);
-        VerificadorAtualizacao verificador = VerificadorAtualizacao.destaMaquina(chaves(props), versaoAtual,
-                formatoInstalado(Autostart.launcherDesteProcesso(), Path.of(System.getProperty("user.home", "."))));
-        return new GerenteAtualizacao(dirs, new EstadoAtualizacao(dirs.atualizacao().resolve(GerenteAtualizacao.ARQUIVO_ESTADO)), cliente, verificador, Clock.systemUTC());
+        return padrao(System.out, System.err, versaoAtual).gerente(dirs, System.getProperty("os.name"));
+    }
+
+    /**
+     * Fábrica ÚNICA do gerente — agente de desktop e {@code --atualizar} do CLI (que antes montava o seu à mão e ficava sem a guarda:
+     * adversarial L3). Só o MSI do Windows apaga a versão anterior ao atualizar, então só lá o rollback precisa do instalador da versão
+     * atual guardado antes (plano F6 D4); em Linux/macOS a volta é a troca de diretório.
+     */
+    GerenteAtualizacao gerente(DiretoriosDoAgente dirs, String osName) {
+        GerenteAtualizacao g = new GerenteAtualizacao(dirs, new EstadoAtualizacao(dirs.atualizacao().resolve(GerenteAtualizacao.ARQUIVO_ESTADO)),
+                new ClienteRelease(manifesto, PRAZO, versaoAtual),
+                new VerificadorAtualizacao(chaves, versaoAtual, osName, System.getProperty("os.arch"), formato), Clock.systemUTC());
+        if (br.com.wagner.wagsyspet.agente.app.atualizacao.Plataforma.windows(osName) && formato == ManifestoRelease.FormatoInstalado.INSTALADOR) {
+            g.guardaAnterior(new GuardaAnterior(manifesto, chaves, osName, System.getProperty("os.arch"), dirs.atualizacao().resolve("anterior"), PRAZO));
+        }
+        return g;
     }
 
     /**
@@ -126,9 +137,7 @@ final class ComandosAtualizacao {
         } catch (IOException e) {
             log.debug("lock: {}", e.toString());
         }
-        GerenteAtualizacao g = new GerenteAtualizacao(dirs, new EstadoAtualizacao(dirs.atualizacao().resolve(GerenteAtualizacao.ARQUIVO_ESTADO)),
-                new ClienteRelease(manifesto, PRAZO, versaoAtual),
-                new VerificadorAtualizacao(chaves, versaoAtual, System.getProperty("os.name"), System.getProperty("os.arch"), formato), Clock.systemUTC());
+        GerenteAtualizacao g = gerente(dirs, System.getProperty("os.name"));
         GerenteAtualizacao.Situacao s = g.verificar();
         out.println("Versão instalada: " + versaoAtual + " · situação: " + s);
         switch (s) {
@@ -142,7 +151,7 @@ final class ComandosAtualizacao {
                     lancador.lancar(plano);
                     out.println("Atualizador lançado para " + g.versaoDisponivel().orElse("?") + " (plano " + plano + ").");
                     return 0;
-                } catch (IOException e) {
+                } catch (IOException | RuntimeException e) { // o lançador real embrulha a falha do ProcessBuilder em UncheckedIOException
                     g.abortarAplicacao(e.toString());
                     err.println("Não consegui iniciar a atualização: " + e.getMessage());
                     return Main.SAIDA_FALHA;

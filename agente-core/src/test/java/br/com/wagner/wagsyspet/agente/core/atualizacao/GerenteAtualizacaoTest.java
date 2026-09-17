@@ -69,6 +69,25 @@ class GerenteAtualizacaoTest {
     @AfterEach
     void derrubar() { servidor.stop(0); }
 
+    @Test
+    @DisplayName("com GuardaAnterior: quando a atualização fica BAIXADA a guarda é acionada com a versão atual (antes de aplicar); guarda falhando não impede a atualização; ATUALIZADO não aciona")
+    void guardaAnteriorAcionada(@TempDir Path tmp) throws Exception {
+        java.util.List<String> pedidas = new java.util.ArrayList<>();
+        GerenteAtualizacao g = gerente(tmp, "1.0.0");
+        java.util.List<Boolean> dentroDoMonitor = new java.util.ArrayList<>();
+        g.guardaAnterior(v -> { pedidas.add(v); dentroDoMonitor.add(Thread.holdsLock(g)); if (pedidas.size() == 1) { throw new IllegalStateException("rede fora"); } return Optional.of(tmp.resolve("anterior").resolve("x.exe")); });
+        assertThat(g.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+        assertThat(pedidas).containsExactly("1.0.0");
+        assertThat(g.verificar()).as("304/já baixado: garante de novo (barato quando já está lá)").isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+        assertThat(pedidas).containsExactly("1.0.0", "1.0.0");
+        assertThat(dentroDoMonitor).as("a guarda baixa ~70 MB: FORA do monitor do gerente, senão 'Atualizar agora'/parear/confirmar ficam presos nela (adversarial L3)").containsOnly(false);
+        publicar("1.0.0");
+        GerenteAtualizacao atual = gerente(tmp.resolve("b"), "1.0.0");
+        atual.guardaAnterior(v -> { pedidas.add("NAO"); return Optional.empty(); });
+        assertThat(atual.verificar()).isEqualTo(GerenteAtualizacao.Situacao.ATUALIZADO);
+        assertThat(pedidas).doesNotContain("NAO");
+    }
+
     private void publicar(String versao) throws Exception {
         String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(instalador));
         json = ("{\"formato\":1,\"versao\":\"" + versao + "\",\"protocolo\":1,\"kid\":\"" + chaves.kidAtual() + "\",\"artefatos\":{\"linux\":{\"arquivo\":\"AgroEase-Agente-Impressao-" + versao + "-linux-x64.deb\",\"url\":\"" + base + "/i.deb\",\"sha256\":\"" + sha + "\",\"tamanho\":" + instalador.length + "}}}").getBytes(StandardCharsets.UTF_8);
@@ -176,6 +195,21 @@ class GerenteAtualizacaoTest {
         assertThat(downloadsInstalador.get()).isZero();
         agora = agora.plus(Duration.ofHours(25));
         assertThat(deNovo.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+    }
+
+    @Test
+    @DisplayName("boots do binário ANTIGO com a troca pendente (ex.: o supervisor reabriu o agente no meio da instalação) NÃO contam como tentativa da versão nova: nunca mandam REVERTER nem gastam os boots dela (adversarial L3)")
+    void bootDoAntigoNaoConta(@TempDir Path tmp) throws Exception {
+        GerenteAtualizacao velho = gerente(tmp, "1.0.0");
+        velho.verificar();
+        velho.prepararAplicacao("1.0.0", Optional.empty(), ManifestoRelease.FormatoInstalado.INSTALADOR);
+        for (int i = 0; i < 3; i++) {
+            assertThat(gerente(tmp, "1.0.0").avaliarBoot()).isEqualTo(GerenteAtualizacao.DecisaoBoot.AGUARDAR_CONFIRMACAO);
+        }
+        assertThat(velho.estado().ler().tentativasBoot()).isZero();
+        GerenteAtualizacao novo = gerente(tmp, "1.1.0");
+        assertThat(novo.avaliarBoot()).as("1º boot DA NOVA").isEqualTo(GerenteAtualizacao.DecisaoBoot.AGUARDAR_CONFIRMACAO);
+        assertThat(novo.estado().ler().tentativasBoot()).isEqualTo(1);
     }
 
     @Test

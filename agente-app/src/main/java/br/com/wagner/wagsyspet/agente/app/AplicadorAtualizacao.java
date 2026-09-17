@@ -55,13 +55,36 @@ public final class AplicadorAtualizacao {
     private final PrintStream out;
     private final Instalador instalador;
     private final Relancador relancador;
+    private final java.util.function.Consumer<PlanoAtualizacao> antesDeInstalar;
+    private final java.util.function.Consumer<Optional<PlanoAtualizacao>> desfazerPausa;
     private final Duration esperaLock;
 
     AplicadorAtualizacao(PrintStream out, Instalador instalador, Relancador relancador, Duration esperaLock) {
+        this(out, instalador, relancador, esperaLock, plano -> { });
+    }
+
+    /**
+     * @param antesDeInstalar pausa o supervisor que relança sozinho (Windows: tarefa keepalive) — o agente já pausa ao sair, mas o
+     *                        {@code --atualizar} do CLI não tem agente para isso. Quem reabilita é o {@link Relancador}.
+     */
+    AplicadorAtualizacao(PrintStream out, Instalador instalador, Relancador relancador, Duration esperaLock, java.util.function.Consumer<PlanoAtualizacao> antesDeInstalar) {
+        this(out, instalador, relancador, esperaLock, antesDeInstalar, plano -> { });
+    }
+
+    /**
+     * @param desfazerPausa o agente pausa o supervisor ANTES de sair para atualizar; quando o atualizador desiste sem instalar (plano
+     *                      ilegível → vazio; agente não soltou a trava → o plano) a pausa tem de ser desfeita, senão a loja fica sem
+     *                      supervisor até o próximo login. NÃO relança: com o agente vivo, relançar mata a instância no macOS
+     *                      ({@code kickstart -k}) e abre o diálogo de 2ª instância no Linux sem unit.
+     */
+    AplicadorAtualizacao(PrintStream out, Instalador instalador, Relancador relancador, Duration esperaLock,
+                         java.util.function.Consumer<PlanoAtualizacao> antesDeInstalar, java.util.function.Consumer<Optional<PlanoAtualizacao>> desfazerPausa) {
         this.out = out;
         this.instalador = instalador;
         this.relancador = relancador;
         this.esperaLock = esperaLock;
+        this.antesDeInstalar = antesDeInstalar;
+        this.desfazerPausa = desfazerPausa;
     }
 
     /** Estratégia real por SO (F6-L2): o instalador é escolhido pelo plano na hora de aplicar; o relançamento passa pelo supervisor. */
@@ -75,7 +98,20 @@ public final class AplicadorAtualizacao {
                 throw new java.io.UncheckedIOException(e);
             }
         });
-        return new AplicadorAtualizacao(out, porPlano, supervisor, ESPERA_LOCK);
+        return new AplicadorAtualizacao(out, porPlano, supervisor, ESPERA_LOCK, plano -> {
+            try {
+                br.com.wagner.wagsyspet.agente.app.autostart.Autostart.paraEsteSo(Path.of(plano.dirDados())).pausar(plano.launcherAtual().map(Path::of));
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }, plano -> {
+            try {
+                Path dados = plano.map(p -> Path.of(p.dirDados())).orElseGet(() -> DiretoriosDoAgente.padrao().raiz());
+                br.com.wagner.wagsyspet.agente.app.autostart.Autostart.paraEsteSo(dados).retomar(plano.flatMap(PlanoAtualizacao::launcherAtual).map(Path::of));
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
     }
 
     public int aplicar(Path arquivoPlano) {
@@ -84,6 +120,7 @@ public final class AplicadorAtualizacao {
             plano = PlanoAtualizacao.ler(arquivoPlano);
         } catch (IOException e) {
             out.println("Plano de atualização ilegível: " + e.getMessage());
+            desfazerPausa(Optional.empty(), out);
             return Main.SAIDA_FALHA;
         }
         DiretoriosDoAgente dirs = new DiretoriosDoAgente(Path.of(plano.dirDados()));
@@ -122,10 +159,33 @@ public final class AplicadorAtualizacao {
             out.println("O agente não encerrou em " + esperaLock.toSeconds() + " s; atualização cancelada (ele segue na versão atual).");
             GerenteAtualizacao.esquecerAplicacao(estado, "agente não soltou o lock");
             apagar(arquivoPlano);
+            desfazerPausa(Optional.of(plano), out); // supervisor de novo ligado: traz o agente de volta quando (e se) ele morrer
             return Main.SAIDA_FALHA;
         }
+        try {
+            antesDeInstalar.accept(plano);
+        } catch (RuntimeException e) {
+            out.println("Aviso: não consegui pausar o supervisor antes de instalar (" + e.getMessage() + "); seguindo.");
+        }
+        // plano INVERTIDO = reversão entregue pela sentinela (Windows): nova do plano = anterior da troca pendente, e vice-versa
+        final Optional<EstadoAtualizacao.EmAplicacao> revertendo = estado.ler().emAplicacao()
+                .filter(ap -> ap.versaoNova().equals(plano.versaoAnterior()) && plano.versaoNova().equals(ap.versaoAnterior()));
         final Instalador.Resultado r = aplicarComSeguranca(plano);
         apagar(arquivoPlano);
+        if (revertendo.isPresent()) {
+            // quem fecha o estado da reversão é quem instalou, com o resultado REAL (adversarial L3 r2)
+            if (r.ok()) {
+                out.println("Instalado: " + r.detalhe() + " (reversão para " + plano.versaoNova() + ")");
+                GerenteAtualizacao.registrarRecusa(estado, revertendo.get(), Clock.systemUTC(), "revertida para " + plano.versaoNova());
+                GerenteAtualizacao.esquecerAplicacao(estado, "reversão concluída");
+                relancar(r.launcherNovo().or(() -> plano.launcherAtual().map(Path::of)).orElse(null), "novo", out);
+                return 0;
+            }
+            out.println("Falha ao instalar: " + r.detalhe() + " (a reversão para " + plano.versaoNova() + " NÃO aconteceu; segue a " + plano.versaoAnterior() + ")");
+            GerenteAtualizacao.esquecerAplicacao(estado, "reversão para " + plano.versaoNova() + " falhou: " + r.detalhe());
+            relancar(plano.launcherAtual().map(Path::of).orElse(null), "anterior", out);
+            return Main.SAIDA_FALHA;
+        }
         if (r.ok()) {
             out.println("Instalado: " + r.detalhe());
             Path launcher = r.launcherNovo().or(() -> plano.launcherAtual().map(Path::of)).orElse(null);
@@ -138,6 +198,14 @@ public final class AplicadorAtualizacao {
                 () -> log.warn("estado sem emAplicacao ao falhar; nada a recusar"));
         relancar(plano.launcherAtual().map(Path::of).orElse(null), "anterior", out);
         return Main.SAIDA_FALHA;
+    }
+
+    private void desfazerPausa(Optional<PlanoAtualizacao> plano, PrintStream out) {
+        try {
+            desfazerPausa.accept(plano);
+        } catch (RuntimeException e) {
+            out.println("Aviso: não consegui retomar o supervisor: " + e.getMessage());
+        }
     }
 
     private Instalador.Resultado aplicarComSeguranca(PlanoAtualizacao plano) {

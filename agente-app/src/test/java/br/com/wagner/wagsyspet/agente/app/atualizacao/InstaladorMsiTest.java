@@ -70,12 +70,22 @@ class InstaladorMsiTest {
         assertThat(r.detalhe()).contains("1618");
     }
 
+    /** Guarda como o GuardaAnterior guarda: .exe + versao.txt (versão, arquivo, sha256). */
+    static Path guardar(Path anterior, String versao, String conteudo) throws Exception {
+        Files.createDirectories(anterior);
+        Path exe = anterior.resolve("AgroEase-Agente-Impressao-" + versao + "-windows-x64.exe");
+        Files.writeString(exe, conteudo);
+        String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(conteudo.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        Files.writeString(anterior.resolve("versao.txt"), versao + "\n" + exe.getFileName() + "\n" + sha + "\n");
+        return exe;
+    }
+
     @Test
-    @DisplayName("falha (1603) com instalador ANTERIOR guardado → reinstala o anterior (downgrade permitido pelo jpackage) e FALHOU com os dois códigos; sem anterior → só FALHOU")
+    @DisplayName("falha (1603) com o instalador da versão ANTERIOR guardado E CONFERIDO (versao.txt = versão anterior do plano, sha bate) → reinstala; .exe de OUTRA versão, sem marcador ou adulterado → NÃO usa (rollback para a versão errada é pior que nenhum — adversarial L3)")
     void falhaReinstalaAnterior(@TempDir Path tmp) throws Exception {
         Path exe = tmp.resolve("novo.exe"); Files.writeString(exe, "x");
-        Path anterior = tmp.resolve("anterior"); Files.createDirectories(anterior);
-        Path exeAnterior = anterior.resolve("AgroEase-Agente-Impressao-1.0.0-windows-x64.exe"); Files.writeString(exeAnterior, "old");
+        Path anterior = tmp.resolve("anterior");
+        Path exeAnterior = guardar(anterior, "1.0.0", "old");
         Cmd cmd = new Cmd(); cmd.resposta = c -> new ComandoExterno.Saida(c.get(0).equals(exe.toString()) ? 1603 : 0, "");
         InstaladorMsi i = new InstaladorMsi(cmd, anterior, tmp.resolve("logs"), ms -> { });
         AplicadorAtualizacao.Instalador.Resultado r = i.aplicar(plano(tmp, exe));
@@ -85,20 +95,22 @@ class InstaladorMsiTest {
         assertThat(cmd.chamadas.get(1)).startsWith(exeAnterior.toString(), "/qn", "/norestart");
 
         Cmd semAnterior = new Cmd(); semAnterior.resposta = c -> new ComandoExterno.Saida(1603, "");
-        InstaladorMsi j = new InstaladorMsi(semAnterior, tmp.resolve("vazio"), tmp.resolve("logs"), ms -> { });
-        assertThat(j.aplicar(plano(tmp, exe)).ok()).isFalse();
+        assertThat(new InstaladorMsi(semAnterior, tmp.resolve("vazio"), tmp.resolve("logs"), ms -> { }).aplicar(plano(tmp, exe)).ok()).isFalse();
         assertThat(semAnterior.chamadas).hasSize(1);
-    }
 
-    @Test
-    @DisplayName("reverter(): reinstala o anterior guardado (true) — sem anterior, false")
-    void reverter(@TempDir Path tmp) throws Exception {
-        Path anterior = tmp.resolve("anterior"); Files.createDirectories(anterior);
-        Files.writeString(anterior.resolve("AgroEase-Agente-Impressao-1.0.0-windows-x64.exe"), "old");
-        Cmd cmd = new Cmd();
-        InstaladorMsi i = new InstaladorMsi(cmd, anterior, tmp.resolve("logs"), ms -> { });
-        assertThat(i.reverter(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()))).isTrue();
-        assertThat(cmd.chamadas.get(0).get(0)).endsWith("1.0.0-windows-x64.exe");
-        assertThat(new InstaladorMsi(new Cmd(), tmp.resolve("vazio"), tmp.resolve("logs"), ms -> { }).reverter(new EstadoAtualizacao.EmAplicacao("9.9.9", "1.0.0", null, Instant.now()))).isFalse();
+        Cmd outraVersao = new Cmd(); outraVersao.resposta = c -> new ComandoExterno.Saida(1603, "");
+        guardar(tmp.resolve("velho"), "0.9.0", "muito-old"); // sobrou de um update antigo; o plano diz que a anterior é 1.0.0
+        assertThat(new InstaladorMsi(outraVersao, tmp.resolve("velho"), tmp.resolve("logs"), ms -> { }).aplicar(plano(tmp, exe)).detalhe()).containsIgnoringCase("sem instalador anterior");
+        assertThat(outraVersao.chamadas).hasSize(1);
+
+        Cmd semMarcador = new Cmd(); semMarcador.resposta = c -> new ComandoExterno.Saida(1603, "");
+        Files.createDirectories(tmp.resolve("solto")); Files.writeString(tmp.resolve("solto/AgroEase-Agente-Impressao-1.0.0-windows-x64.exe"), "old");
+        new InstaladorMsi(semMarcador, tmp.resolve("solto"), tmp.resolve("logs"), ms -> { }).aplicar(plano(tmp, exe));
+        assertThat(semMarcador.chamadas).hasSize(1);
+
+        Cmd adulterado = new Cmd(); adulterado.resposta = c -> new ComandoExterno.Saida(1603, "");
+        Path trocado = guardar(tmp.resolve("trocado"), "1.0.0", "old"); Files.writeString(trocado, "outro conteúdo");
+        new InstaladorMsi(adulterado, tmp.resolve("trocado"), tmp.resolve("logs"), ms -> { }).aplicar(plano(tmp, exe));
+        assertThat(adulterado.chamadas).hasSize(1);
     }
 }

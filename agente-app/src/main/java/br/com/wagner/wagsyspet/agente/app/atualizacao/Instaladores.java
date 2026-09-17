@@ -3,6 +3,7 @@ package br.com.wagner.wagsyspet.agente.app.atualizacao;
 import br.com.wagner.wagsyspet.agente.app.AplicadorAtualizacao;
 import br.com.wagner.wagsyspet.agente.app.autostart.Autostart;
 import br.com.wagner.wagsyspet.agente.app.autostart.ComandoExterno;
+import br.com.wagner.wagsyspet.agente.core.atualizacao.LancadorAtualizador;
 import br.com.wagner.wagsyspet.agente.core.atualizacao.PlanoAtualizacao;
 import br.com.wagner.wagsyspet.agente.core.atualizacao.Reversor;
 import br.com.wagner.wagsyspet.agente.core.pareamento.DiretoriosDoAgente;
@@ -27,10 +28,21 @@ public final class Instaladores {
         return estrategia(System.getProperty("os.name"), plano.formato(), launcher, dirs).orElse(AplicadorAtualizacao.Instalador.indisponivel());
     }
 
-    /** Reversor do agente (sentinela de boot): mesma estratégia, precisa saber onde está instalado. */
-    public static Reversor reversorDesteSo(DiretoriosDoAgente dirs, ManifestoRelease.FormatoInstalado formato) {
-        return estrategia(System.getProperty("os.name"), formato, Autostart.launcherDesteProcesso(), dirs)
-                .map(i -> (Reversor) i).orElse(Reversor.NENHUM);
+    /**
+     * Reversor do agente (sentinela de boot). Linux/macOS: a mesma estratégia de troca de diretório, que precisa saber onde está
+     * instalado. Windows: a volta é um MSI, que não roda de dentro do agente instalado → {@link ReversorMsiDeFora}.
+     */
+    public static Reversor reversorDesteSo(DiretoriosDoAgente dirs, ManifestoRelease.FormatoInstalado formato, LancadorAtualizador deFora,
+                                           Runnable pausarSupervisor, Runnable retomarSupervisor) {
+        return reversor(System.getProperty("os.name"), formato, Autostart.launcherDesteProcesso(), dirs, deFora, pausarSupervisor, retomarSupervisor);
+    }
+
+    static Reversor reversor(String osName, ManifestoRelease.FormatoInstalado formato, Optional<Path> launcher, DiretoriosDoAgente dirs,
+                             LancadorAtualizador deFora, Runnable pausarSupervisor, Runnable retomarSupervisor) {
+        if (Plataforma.windows(osName)) {
+            return new ReversorMsiDeFora(dirs, deFora, () -> launcher, pausarSupervisor, retomarSupervisor);
+        }
+        return estrategia(osName, formato, launcher, dirs).filter(i -> i instanceof Reversor).map(i -> (Reversor) i).orElse(Reversor.NENHUM);
     }
 
     static Optional<AplicadorAtualizacao.Instalador> estrategia(String osName, ManifestoRelease.FormatoInstalado formato, Optional<Path> launcher, DiretoriosDoAgente dirs) {

@@ -107,10 +107,13 @@ public final class ClienteRelease {
             }
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
             long total = 0;
-            try (InputStream in = r.body(); OutputStream out = Files.newOutputStream(tmp)) {
+            // o timeout do HttpRequest só vale até os HEADERS; um corpo que estanca prenderia o read() para sempre (adversarial L3):
+            // a vigia fecha o stream quando passa {@code prazo} sem chegar nenhum byte
+            try (InputStream in = r.body(); OutputStream out = Files.newOutputStream(tmp); VigiaDeProgresso vigia = new VigiaDeProgresso(in, prazo)) {
                 byte[] buf = new byte[64 * 1024];
                 int n;
                 while ((n = in.read(buf)) > 0) {
+                    vigia.progrediu();
                     total += n;
                     if (total > artefato.tamanho()) {
                         throw new ReleaseIndisponivelException("download passou do tamanho do manifesto (" + artefato.tamanho() + " bytes)");
@@ -137,6 +140,43 @@ public final class ClienteRelease {
                 Thread.currentThread().interrupt();
             }
             throw new ReleaseIndisponivelException("falha no download: " + e, e);
+        }
+    }
+
+    /** Fecha o stream do corpo se passar {@code prazo} sem progresso (thread daemon; encerra no close()). */
+    private static final class VigiaDeProgresso implements AutoCloseable {
+        private final Thread thread;
+        private volatile long ultimoProgresso = System.nanoTime();
+        private volatile boolean encerrada;
+
+        VigiaDeProgresso(InputStream corpo, Duration prazo) {
+            long limite = prazo.toNanos();
+            thread = new Thread(() -> {
+                while (!encerrada) {
+                    if (System.nanoTime() - ultimoProgresso > limite) {
+                        log.warn("Download sem progresso há {} s; abortando", prazo.toSeconds());
+                        fechar(corpo);
+                        return;
+                    }
+                    try {
+                        Thread.sleep(Math.min(250, Math.max(10, prazo.toMillis() / 4)));
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }, "agente-download-vigia");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        void progrediu() {
+            ultimoProgresso = System.nanoTime();
+        }
+
+        @Override
+        public void close() {
+            encerrada = true;
+            thread.interrupt();
         }
     }
 
