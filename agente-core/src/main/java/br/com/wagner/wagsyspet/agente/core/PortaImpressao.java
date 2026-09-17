@@ -26,6 +26,14 @@ public interface PortaImpressao {
      */
     Resultado imprimir(byte[] pdf, String impressora, String nomeJob);
 
+    /**
+     * F6-L5: bytes crus do catálogo {@code ComandosRaw} (gaveta/corte) como job SEPARADO na mesma fila. Bloqueante (vai pela
+     * {@link FilaImpressao}); nunca lança. Default = motor sem suporte.
+     */
+    default Resultado enviarRaw(byte[] bytes, String impressora, String nomeJob) {
+        return new Resultado(Resultado.Estado.ERRO, impressora, "este motor de impressão não envia comandos diretos à impressora");
+    }
+
     /** Implementação real sobre a fachada por SO (Windows → PrinterJob; Linux/macOS → lp), papel do driver por padrão. */
     static PortaImpressao real() {
         Impressora impressora = Impressora.padrao();
@@ -43,6 +51,11 @@ public interface PortaImpressao {
             @Override
             public Resultado imprimir(byte[] pdf, String nome, String nomeJob) {
                 return impressora.imprimirPdf(pdf, nome, ModoPapel.PAPEL_DO_DRIVER, nomeJob);
+            }
+
+            @Override
+            public Resultado enviarRaw(byte[] bytes, String nome, String nomeJob) {
+                return impressora.enviarRaw(bytes, nome, nomeJob);
             }
         };
     }

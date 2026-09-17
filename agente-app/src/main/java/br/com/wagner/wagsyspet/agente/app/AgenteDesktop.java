@@ -554,6 +554,44 @@ final class AgenteDesktop implements AcoesUi.Agente {
         atualizarEstado();
     }
 
+    // ── F6-L5: gaveta e corte pela interface do agente (loja que não usa o painel do PWA) ────────────────────────────
+
+    @Override
+    public Optional<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> extrasDaImpressora() {
+        return config.extrasAtivos();
+    }
+
+    /** Grava o opt-in para a impressora SELECIONADA (o nome que vier no record é ignorado: a autorização é do hardware em uso). */
+    @Override
+    public void configurarExtras(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao pedido) throws IOException {
+        String impressora = config.impressoraSelecionada().orElseThrow(() -> new IOException("Escolha a impressora deste computador antes de ligar a gaveta ou o corte"));
+        var extras = new br.com.wagner.wagsyspet.agente.core.ExtrasImpressao(impressora, pedido.dialeto(), pedido.gaveta(), pedido.corte(), pedido.gavetaPino(), pedido.gavetaPulsoMs());
+        config.extras(extras.algumLigado() ? extras : null);
+        log.info("Gaveta/corte configurados pela interface para '{}': dialeto={} gaveta={} corte={} pino={} pulso={} ms",
+                impressora, extras.dialeto(), extras.gaveta(), extras.corte(), extras.gavetaPino(), extras.gavetaPulsoMs());
+    }
+
+    /** "Testar": manda os bytes do catálogo com os valores do DIÁLOGO, sem ligar nada — liga-se só depois de ver o efeito físico. */
+    @Override
+    public String testarGaveta(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores) throws IOException {
+        return testarRaw("gaveta", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.abrirGaveta(valores.dialeto(), valores.gavetaPino(), valores.gavetaPulsoMs()));
+    }
+
+    @Override
+    public String testarCorte(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores) throws IOException {
+        return testarRaw("corte", br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.cortar(valores.dialeto()));
+    }
+
+    private String testarRaw(String qual, byte[] bytes) throws IOException {
+        String impressora = config.impressoraSelecionada().orElseThrow(() -> new IOException("Escolha a impressora deste computador antes do teste"));
+        Resultado r = impressao.enviarRaw(bytes, impressora, "AgroEase " + qual + " teste");
+        log.info("Teste de {} pela interface em '{}' → {} ({})", qual, impressora, r.estado(), r.detalhe());
+        if (!r.aceito()) {
+            throw new IOException("A impressora '" + impressora + "' não aceitou o comando. Confira se está ligada. Detalhe no log.");
+        }
+        return "Comando enviado para " + impressora + ".";
+    }
+
     Resultado imprimirTesteResultado() throws IOException {
         String impressora = config.impressoraSelecionada().orElseThrow(() -> new IOException("Escolha a impressora deste computador antes do teste"));
         byte[] pdf = PdfTeste.cupom80mm(Main.NOME_PRODUTO, versao + " · teste pela bandeja");

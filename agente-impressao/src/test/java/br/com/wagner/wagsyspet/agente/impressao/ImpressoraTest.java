@@ -100,6 +100,21 @@ class ImpressoraTest {
     }
 
     @Test
+    @DisplayName("F6-L5: enviarRaw roteia como o PDF — Windows → spooler nativo (javax.print AUTOSENSE = pDatatype RAW); Linux/macOS/outro → lp -o raw (o javax.print do Unix hardcoda o lpr e não tem '-o raw'); fachada sem submissor raw → ERRO honesto, sem lançar")
+    void rawRoteiaPorSo() {
+        java.util.List<String> chamadas = new java.util.ArrayList<>();
+        Impressora.SubmissorPdf nada = (pdf, imp, modo, job) -> { throw new AssertionError("não é PDF"); };
+        Impressora.SubmissorRaw win = (bytes, imp, job) -> { chamadas.add("win:" + job + ":" + bytes.length); return new ImpressoraJavaxPrint.Resultado(ImpressoraJavaxPrint.Resultado.Estado.ACEITO_SPOOLER, imp, "w"); };
+        Impressora.SubmissorRaw unix = (bytes, imp, job) -> { chamadas.add("unix:" + job + ":" + bytes.length); return new ImpressoraJavaxPrint.Resultado(ImpressoraJavaxPrint.Resultado.Estado.ACEITO_SPOOLER, imp, "u"); };
+        byte[] gaveta = {0x1B, 0x70, 0x00, 0x19, (byte) 0xFA};
+        new Impressora(Impressora.Sistema.WINDOWS, nada, nada, win, unix).enviarRaw(gaveta, "EPSON", "AgroEase gaveta j1");
+        new Impressora(Impressora.Sistema.LINUX, nada, nada, win, unix).enviarRaw(gaveta, "EPSON", "AgroEase gaveta j2");
+        new Impressora(Impressora.Sistema.MAC, nada, nada, win, unix).enviarRaw(gaveta, "EPSON", "AgroEase gaveta j3");
+        assertThat(chamadas).containsExactly("win:AgroEase gaveta j1:5", "unix:AgroEase gaveta j2:5", "unix:AgroEase gaveta j3:5");
+        assertThat(new Impressora(Impressora.Sistema.LINUX, nada, nada).enviarRaw(gaveta, "EPSON", "x").estado()).isEqualTo(ImpressoraJavaxPrint.Resultado.Estado.ERRO);
+    }
+
+    @Test
     @DisplayName("padrao() constrói a fachada para o SO real com os submissores reais (não lança, lista impressoras)")
     void padraoConstroiSemLancar() {
         Impressora imp = Impressora.padrao();

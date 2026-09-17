@@ -102,4 +102,13 @@ class ImpressoraCupsLpTest {
         var recusado = ImpressoraCupsLp.interpretar(1, "lp: Error - The printer or class does not exist.", "X", "j", ImpressoraJavaxPrint.ModoPapel.PAPEL_DO_DRIVER);
         org.assertj.core.api.Assertions.assertThat(recusado.acompanhamento()).isEmpty();
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("F6-L5 RAW: 'lp -d <fila> -t <job> -o raw <arquivo>' — o libcups força application/vnd.cups-raw e NENHUM filtro roda; sem -o media e sem nopdfAutoRotate (não é PDF). O comando do PDF não muda")
+    void comandoRaw() {
+        org.assertj.core.api.Assertions.assertThat(ImpressoraCupsLp.comandoLpRaw("EPSON", "AgroEase gaveta j1"))
+                .containsExactly("/usr/bin/lp", "-d", "EPSON", "-t", "AgroEase gaveta j1", "-o", "raw");
+        org.assertj.core.api.Assertions.assertThat(ImpressoraCupsLp.comandoLp("EPSON", "AgroEase cupom j1"))
+                .containsExactly("/usr/bin/lp", "-d", "EPSON", "-t", "AgroEase cupom j1", "-o", "nopdfAutoRotate");
+    }
 }

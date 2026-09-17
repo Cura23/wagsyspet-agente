@@ -30,14 +30,31 @@ public final class Impressora {
         Resultado imprimirPdf(byte[] pdf, String impressora, ModoPapel modo, String nomeJob);
     }
 
+    /** F6-L5: bytes CRUS (gaveta/corte do catálogo {@code ComandosRaw}) — o driver não participa. */
+    @FunctionalInterface
+    public interface SubmissorRaw {
+        Resultado enviarRaw(byte[] bytes, String impressora, String nomeJob);
+    }
+
+    private static final SubmissorRaw SEM_RAW = (bytes, impressora, job) ->
+            new Resultado(Resultado.Estado.ERRO, impressora, "este motor de impressão não envia comandos diretos à impressora");
+
     private final Sistema sistema;
     private final SubmissorPdf windows;
     private final SubmissorPdf unix;
+    private final SubmissorRaw rawWindows;
+    private final SubmissorRaw rawUnix;
 
     public Impressora(Sistema sistema, SubmissorPdf windows, SubmissorPdf unix) {
+        this(sistema, windows, unix, SEM_RAW, SEM_RAW);
+    }
+
+    public Impressora(Sistema sistema, SubmissorPdf windows, SubmissorPdf unix, SubmissorRaw rawWindows, SubmissorRaw rawUnix) {
         this.sistema = Objects.requireNonNull(sistema);
         this.windows = Objects.requireNonNull(windows);
         this.unix = Objects.requireNonNull(unix);
+        this.rawWindows = Objects.requireNonNull(rawWindows);
+        this.rawUnix = Objects.requireNonNull(rawUnix);
     }
 
     /** Fachada para o SO real, com os submissores reais. */
@@ -48,7 +65,10 @@ public final class Impressora {
         // Windows: o acompanhamento do job é armado ANTES do print() (F6-L4 — o spooler apaga o job ao imprimir)
         SubmissorPdf windows = (pdf, impressora, modo, nomeJob) -> ImpressoraJavaxPrint.imprimirPdf(pdf, impressora, modo, nomeJob,
                 br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoWindows::armar);
-        return new Impressora(detectar(System.getProperty("os.name")), windows, unix);
+        // RAW: no Unix SÓ pelo lp (-o raw); o javax.print de lá hardcoda o lpr e não tem como pedir raw
+        SubmissorRaw rawUnix = ImpressoraCupsLp.disponivel() ? ImpressoraCupsLp::enviarRaw
+                : (bytes, impressora, job) -> new Resultado(Resultado.Estado.ERRO, impressora, "/usr/bin/lp ausente (instale cups-client)");
+        return new Impressora(detectar(System.getProperty("os.name")), windows, unix, ImpressoraJavaxPrint::enviarRaw, rawUnix);
     }
 
     /** Mapeia {@code os.name} para {@link Sistema}. Público-estático para ser testável sem trocar de SO. */
@@ -77,6 +97,11 @@ public final class Impressora {
 
     public Optional<String> impressoraPadrao() {
         return ImpressoraJavaxPrint.impressoraPadrao();
+    }
+
+    /** Envia bytes crus do catálogo (gaveta/corte) como um job SEPARADO na mesma fila, pelo caminho certo para o SO. */
+    public Resultado enviarRaw(byte[] bytes, String impressora, String nomeJob) {
+        return ((sistema == Sistema.WINDOWS) ? rawWindows : rawUnix).enviarRaw(bytes, impressora, nomeJob);
     }
 
     /** Imprime o PDF na impressora indicada, sem diálogo, pelo caminho certo para o SO. */

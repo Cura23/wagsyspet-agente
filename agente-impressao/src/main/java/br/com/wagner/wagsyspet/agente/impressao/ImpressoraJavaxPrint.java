@@ -135,6 +135,26 @@ public final class ImpressoraJavaxPrint {
         }
     }
 
+    /**
+     * F6-L5 (Windows): bytes crus pelo spooler — {@code DocFlavor.BYTE_ARRAY.AUTOSENSE} faz o JDK abrir o documento com
+     * {@code pDatatype="RAW"} e escrever com {@code WritePrinter}: o driver NÃO renderiza nada. Job separado, na mesma fila do cupom.
+     */
+    public static Resultado enviarRaw(byte[] bytes, String nomeImpressora, String nomeJob) {
+        Optional<PrintService> servico = localizar(nomeImpressora);
+        if (servico.isEmpty()) {
+            return new Resultado(Resultado.Estado.IMPRESSORA_INDISPONIVEL, nomeImpressora,
+                    "Impressora não encontrada no SO. Disponíveis: " + listarImpressoras());
+        }
+        try {
+            javax.print.attribute.HashPrintRequestAttributeSet atributos = new javax.print.attribute.HashPrintRequestAttributeSet();
+            atributos.add(new javax.print.attribute.standard.JobName(nomeJob, null));
+            servico.get().createPrintJob().print(new javax.print.SimpleDoc(bytes, javax.print.DocFlavor.BYTE_ARRAY.AUTOSENSE, null), atributos);
+            return new Resultado(Resultado.Estado.ACEITO_SPOOLER, servico.get().getName(), "Job '" + nomeJob + "' (" + bytes.length + " bytes crus) aceito pelo spooler");
+        } catch (javax.print.PrintException | RuntimeException e) {
+            return new Resultado(Resultado.Estado.ERRO, nomeImpressora, "Spooler recusou o comando direto: " + e);
+        }
+    }
+
     private static Optional<PrintService> localizar(String nome) {
         if (nome == null || nome.isBlank()) {
             return Optional.empty();

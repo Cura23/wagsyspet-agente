@@ -32,6 +32,23 @@ public final class AcoesUi {
         /** Devolve o texto do resultado para mostrar ("ACEITO_SPOOLER — …"). */
         String imprimirTeste() throws Exception;
 
+        // F6-L5 — gaveta e corte (defaults: agente sem suporte)
+        default Optional<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> extrasDaImpressora() {
+            return Optional.empty();
+        }
+
+        default void configurarExtras(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao extras) throws Exception {
+            throw new UnsupportedOperationException();
+        }
+
+        default String testarGaveta(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores) throws Exception {
+            throw new UnsupportedOperationException();
+        }
+
+        default String testarCorte(br.com.wagner.wagsyspet.agente.core.ExtrasImpressao valores) throws Exception {
+            throw new UnsupportedOperationException();
+        }
+
         Path pastaLogs();
 
         boolean pareado();
@@ -105,6 +122,78 @@ public final class AcoesUi {
                 });
             });
         });
+    }
+
+    /**
+     * F6-L5 — "Gaveta e corte…": opt-in DESTE computador para a impressora selecionada. Default tudo desligado; os botões "Testar" usam os
+     * valores do diálogo SEM gravar nada — liga-se só depois de ver a gaveta abrir / o papel cortar. Impressora que não é térmica ESC/POS
+     * recebe os bytes como lixo e o sistema diz "sucesso" (uma laser solta uma folha em branco por comando): por isso o aviso e o teste.
+     */
+    public void gavetaECorte() {
+        emSegundoPlano("gaveta e corte", () -> {
+            Optional<String> impressora = agente.impressoraSelecionada();
+            if (impressora.isEmpty()) {
+                SwingUtilities.invokeLater(() -> mostrarErro.accept("Escolha primeiro a impressora deste computador (\"Impressora…\")."));
+                return;
+            }
+            Optional<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> atuais = agente.extrasDaImpressora();
+            SwingUtilities.invokeLater(() -> mostrarDialogoGavetaECorte(impressora.get(), atuais));
+        });
+    }
+
+    private void mostrarDialogoGavetaECorte(String impressora, Optional<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> atuais) {
+        var Dialeto = br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.Dialeto.class;
+        javax.swing.JCheckBox gaveta = new javax.swing.JCheckBox("Abrir a gaveta nas vendas em dinheiro", atuais.map(e -> e.gaveta()).orElse(false));
+        javax.swing.JCheckBox corte = new javax.swing.JCheckBox("Cortar o papel depois de cada cupom (só se a impressora não corta sozinha)", atuais.map(e -> e.corte()).orElse(false));
+        javax.swing.JComboBox<String> dialeto = new javax.swing.JComboBox<>(new String[]{"Epson, Elgin e compatíveis (ESC/POS)", "Bematech no modo de fábrica (ESC/Bema)"});
+        dialeto.setSelectedIndex(atuais.map(e -> e.dialeto().ordinal()).orElse(0));
+        javax.swing.JComboBox<Integer> pino = new javax.swing.JComboBox<>(new Integer[]{2, 5});
+        pino.setSelectedItem(atuais.map(e -> e.gavetaPino()).orElse(br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PINO_PADRAO));
+        javax.swing.JSpinner pulso = new javax.swing.JSpinner(new javax.swing.SpinnerNumberModel(
+                (int) atuais.map(e -> e.gavetaPulsoMs()).orElse(br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PULSO_PADRAO_MS),
+                br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PULSO_MINIMO_MS, br.com.wagner.wagsyspet.agente.impressao.raw.ComandosRaw.PULSO_MAXIMO_MS, 10));
+        java.util.function.Supplier<br.com.wagner.wagsyspet.agente.core.ExtrasImpressao> valores = () -> new br.com.wagner.wagsyspet.agente.core.ExtrasImpressao(
+                impressora, Dialeto.getEnumConstants()[dialeto.getSelectedIndex()], gaveta.isSelected(), corte.isSelected(), (Integer) pino.getSelectedItem(), (Integer) pulso.getValue());
+
+        javax.swing.JButton testarGaveta = new javax.swing.JButton("Testar gaveta");
+        testarGaveta.addActionListener(e -> { var v = valores.get(); emSegundoPlano("testar gaveta", () -> avisar(agente.testarGaveta(v) + "\nA gaveta abriu? Se não abriu, aumente o pulso ou troque o tipo de impressora.")); });
+        javax.swing.JButton testarCorte = new javax.swing.JButton("Testar corte");
+        testarCorte.addActionListener(e -> { var v = valores.get(); emSegundoPlano("testar corte", () -> avisar(agente.testarCorte(v) + "\nO papel cortou? Se saíram caracteres estranhos, troque o tipo de impressora ou deixe desligado.")); });
+
+        javax.swing.JPanel painel = new javax.swing.JPanel();
+        painel.setLayout(new javax.swing.BoxLayout(painel, javax.swing.BoxLayout.Y_AXIS));
+        String aviso = pareceVirtual(impressora)
+                ? "<br><b>Esta impressora parece virtual (PDF/XPS/Fax): gaveta e corte não fazem sentido aqui.</b>" : "";
+        painel.add(new javax.swing.JLabel("<html>Impressora deste computador: <b>" + impressora.replace("<", "&lt;") + "</b>" + aviso
+                + "<br>Só para impressora térmica de cupom. Use <b>Testar</b> e ligue só se funcionar:<br>"
+                + "em outro tipo de impressora sai uma folha em branco a cada comando.</html>"));
+        for (java.awt.Component c : new java.awt.Component[]{gaveta, corte, new javax.swing.JLabel("Tipo de impressora:"), dialeto,
+                new javax.swing.JLabel("Conector da gaveta (pino):"), pino, new javax.swing.JLabel("Pulso da gaveta (ms):"), pulso}) {
+            ((javax.swing.JComponent) c).setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+            painel.add(c);
+        }
+        javax.swing.JPanel testes = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT));
+        testes.add(testarGaveta);
+        testes.add(testarCorte);
+        testes.setAlignmentX(java.awt.Component.LEFT_ALIGNMENT);
+        painel.add(testes);
+
+        int escolha = JOptionPane.showConfirmDialog(null, painel, TITULO + " — Gaveta e corte", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (escolha != JOptionPane.OK_OPTION) {
+            return;
+        }
+        var v = valores.get();
+        emSegundoPlano("salvar gaveta e corte", () -> {
+            agente.configurarExtras(v);
+            avisar(v.algumLigado() ? "Salvo: " + (v.gaveta() ? "gaveta ligada" : "gaveta desligada") + ", " + (v.corte() ? "corte ligado" : "corte desligado") + "."
+                    : "Gaveta e corte desligados neste computador.");
+        });
+    }
+
+    /** Aviso de UX, não bloqueio: nomes típicos de impressora que não é hardware de cupom. */
+    static boolean pareceVirtual(String nome) {
+        String n = nome.toLowerCase(java.util.Locale.ROOT);
+        return n.equals("pdf") || n.contains("print to pdf") || n.contains("cups-pdf") || n.contains("xps") || n.contains("fax") || n.contains("onenote");
     }
 
     public void imprimirTeste() {

@@ -33,6 +33,22 @@ final class PortaImpressaoFake implements PortaImpressao {
     /** F6-L4: quando != null, todo job ACEITO nasce com este acompanhamento do spooler (recebe o nomeJob). */
     volatile java.util.function.Function<String, br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoSpooler> acompanhamento;
 
+    /** F6-L5: comandos crus recebidos (gaveta/corte), na ordem; e a ORDEM geral de chegada ao motor ("raw:<job>" / "pdf:<job>"). */
+    record Raw(byte[] bytes, String impressora, String nomeJob) {
+    }
+
+    final List<Raw> raws = new CopyOnWriteArrayList<>();
+    final List<String> ordem = new CopyOnWriteArrayList<>();
+    /** Quando true, todo enviarRaw devolve ERRO (gaveta/corte falhando não pode derrubar o cupom). */
+    volatile boolean rawComErro;
+
+    @Override
+    public Resultado enviarRaw(byte[] bytes, String impressora, String nomeJob) {
+        raws.add(new Raw(bytes, impressora, nomeJob));
+        ordem.add("raw:" + nomeJob);
+        return rawComErro ? new Resultado(Estado.ERRO, impressora, "raw recusado (fake)") : new Resultado(Estado.ACEITO_SPOOLER, impressora, "raw aceito (fake)");
+    }
+
     PortaImpressaoFake(String... nomes) {
         this.nomes = List.of(nomes);
     }
@@ -70,6 +86,7 @@ final class PortaImpressaoFake implements PortaImpressao {
             }
         }
         jobs.add(new Job(pdf, impressora, nomeJob));
+        ordem.add("pdf:" + nomeJob);
         if (!nomes.contains(impressora)) {
             return new Resultado(Estado.IMPRESSORA_INDISPONIVEL, impressora, "impressora '" + impressora + "' não existe (fake)");
         }

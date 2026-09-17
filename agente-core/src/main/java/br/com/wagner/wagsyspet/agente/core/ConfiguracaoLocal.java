@@ -12,6 +12,18 @@ public interface ConfiguracaoLocal {
 
     Optional<String> impressoraSelecionada();
 
-    /** {@code null} ou branco limpa a seleção. */
+    /** {@code null} ou branco limpa a seleção. Trocar de impressora ZERA os {@link #extras()} (o opt-in é daquele hardware). */
     void impressoraSelecionada(String nome) throws IOException;
+
+    /** F6-L5: opt-in de gaveta/corte como está gravado (pode ser de uma impressora que já não é a selecionada). */
+    Optional<ExtrasImpressao> extras();
+
+    /** {@code null} desliga tudo. */
+    void extras(ExtrasImpressao extras) throws IOException;
+
+    /** O que o protocolo usa: só vale se for da impressora SELECIONADA e houver algo ligado. */
+    default Optional<ExtrasImpressao> extrasAtivos() {
+        Optional<String> selecionada = impressoraSelecionada();
+        return extras().filter(e -> e.algumLigado() && selecionada.isPresent() && selecionada.get().equals(e.impressora()));
+    }
 }
