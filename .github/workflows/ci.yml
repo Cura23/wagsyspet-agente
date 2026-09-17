@@ -157,7 +157,8 @@ jobs:
           case "$RUNNER_OS" in
             macOS) grep -q "estado do cupom no spooler: " "$RUNNER_TEMP/diagnostico.txt" ;;   # runner sem CUPS cliente garantido: só informativo
             # sem acento no padrão: o console do Windows não é UTF-8 ("dispon?vel"); "indisponível" não casa (depois de ": " vem "i")
-            *)     grep -qE "spooler: dispon.*(JNA|lpstat)" "$RUNNER_TEMP/diagnostico.txt" || { echo "acompanhamento do spooler indisponível no binário empacotado"; exit 1; } ;;
+            # LC_ALL=C: em locale UTF-8 o ".*" do grep NÃO atravessa o byte inválido do "í" em Latin-1/OEM (provado localmente)
+            *)     LC_ALL=C grep -qE "spooler: dispon.*(JNA|lpstat)" "$RUNNER_TEMP/diagnostico.txt" || { echo "acompanhamento do spooler indisponível no binário empacotado"; exit 1; } ;;
           esac
           if [ -n "${IMPRESSORA_VIRTUAL:-}" ]; then
             echo "== impressão real pelo binário em '$IMPRESSORA_VIRTUAL'"
