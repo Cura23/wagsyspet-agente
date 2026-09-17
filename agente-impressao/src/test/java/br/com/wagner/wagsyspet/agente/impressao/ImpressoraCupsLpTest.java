@@ -106,9 +106,11 @@ class ImpressoraCupsLpTest {
     @org.junit.jupiter.api.Test
     @org.junit.jupiter.api.DisplayName("F6-L5 RAW: 'lp -d <fila> -t <job> -o raw <arquivo>' — o libcups força application/vnd.cups-raw e NENHUM filtro roda; sem -o media e sem nopdfAutoRotate (não é PDF). O comando do PDF não muda")
     void comandoRaw() {
+        // O executável é um Path: no Windows o toString() troca as barras (o lp nunca roda lá, mas o teste roda no CI dos 3 SOs).
+        String lp = java.nio.file.Path.of("/usr/bin/lp").toString();
         org.assertj.core.api.Assertions.assertThat(ImpressoraCupsLp.comandoLpRaw("EPSON", "AgroEase gaveta j1"))
-                .containsExactly("/usr/bin/lp", "-d", "EPSON", "-t", "AgroEase gaveta j1", "-o", "raw");
+                .containsExactly(lp, "-d", "EPSON", "-t", "AgroEase gaveta j1", "-o", "raw");
         org.assertj.core.api.Assertions.assertThat(ImpressoraCupsLp.comandoLp("EPSON", "AgroEase cupom j1"))
-                .containsExactly("/usr/bin/lp", "-d", "EPSON", "-t", "AgroEase cupom j1", "-o", "nopdfAutoRotate");
+                .containsExactly(lp, "-d", "EPSON", "-t", "AgroEase cupom j1", "-o", "nopdfAutoRotate");
     }
 }
