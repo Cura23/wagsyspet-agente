@@ -35,7 +35,7 @@ PWA (Vercel) ──ws://127.0.0.1──► agente (bandeja) ──► javax.prin
 | `agente-protocolo` | Contrato backend ↔ agente: **ticket Ed25519** (`AssinadorTicket` = lado backend, `VerificadorTicket` = lado agente, `ChavesTicket` SPKI/PKCS#8 base64) + **vetores de teste** `vetores-ticket-v1.json` que os dois repos rodam; `ProtocoloVersao`; `release/` (`ManifestoRelease` = `latest.json`, `VersaoSemantica`, `ChavesRelease` atual + reserva, `VerificadorAssinaturaRelease`) |
 | `agente-impressao` | Imprimir PDF por nome de impressora (`ImpressoraJavaxPrint` no Windows, `ImpressoraCupsLp` no Linux/macOS), `AquecedorPdfBox` (cache de fontes na subida); `spooler/` = **estado real do cupom** depois do aceite (Windows: winspool via JNA, consulta periódica `EnumJobs`; CUPS: IPP com reserva `lpstat`), `raw/` = comandos ESC/POS e ESC/Bema **não-fiscais** de gaveta e corte (catálogo fechado; o PDF nunca é tocado) |
 | `agente-core` | Servidor WebSocket em `127.0.0.1` (`ServidorAgente`): porteiro do handshake (Origin exata + Host loopback), teto de frame 4 MiB, **protocolo v1 + extensões anunciadas em `capacidades`** (tabela abaixo), uma conexão autenticada por Origin, fila de impressão fora da thread da conexão (`FilaImpressao`), fallback de porta 28421 → 28422; **pareamento** (`pareamento/`: `ClientePareamento`, `CofreCredencial` AES-GCM, `DiretoriosDoAgente` por SO); `atualizacao/` = ciclo do **self-update** (`GerenteAtualizacao`, `EstadoAtualizacao`, `GuardaAnterior`, `PlanoAtualizacao`) |
-| `agente-app` | Binário instalado (`Main`): sem argumentos = programa de desktop (bandeja ou janela; headless só se pareado); `--parear`, `--desparear`, `--status`, `--diagnostico`, `--instalar`/`--desinstalar` (iniciar com o sistema), `--verificar-atualizacao` (consulta a release publicada, não instala), `--atualizar` (com o agente fechado: baixa e aplica agora), `--versao`, `--gerar-pdf-teste`, `--imprimir-teste`; opções `--sem-bandeja`, `--verboso`, `--dir-dados`; `atualizacao/` = instaladores por SO e o **atualizador externo** (`--aplicar-atualizacao plano.json`); `autostart/` = tarefa keepalive do Windows, LaunchAgent, systemd --user; log em `logs/agente-0.log`; **empacotamento** `-Pempacotar` (jlink + jpackage → `.exe`/`.deb`/`.tar.gz`/`.dmg`) |
+| `agente-app` | Binário instalado (`Main`): sem argumentos = programa de desktop (bandeja ou janela; headless só se pareado); `--parear`, `--desparear`, `--status`, `--diagnostico`, `--instalar`/`--desinstalar` (iniciar com o sistema), `--verificar-atualizacao` (consulta a release publicada, não instala), `--atualizar` (com o agente fechado: baixa e aplica agora), `--versao`, `--gerar-pdf-teste`, `--imprimir-teste`; opções `--sem-bandeja`, `--verboso`, `--dir-dados`; `atualizacao/` = instaladores por SO e o **atualizador externo** (`--aplicar-atualizacao plano.json`); `autostart/` = tarefa keepalive do Windows, LaunchAgent, systemd --user; log em `logs/agente-0.log`; **empacotamento** `-Pempacotar` (jlink + jpackage → `.exe`/`.deb`/`.dmg` + app-image; o `.tar.gz` do Linux é o app-image empacotado pelo `ci.yml`) |
 
 ## Protocolo (`ws://127.0.0.1:28421`, fallback `28422`)
 
@@ -50,7 +50,7 @@ Protocolo **v1**; as extensões da F6 são aditivas e o agente anuncia o que sab
 | `ping` | `pong` | qualquer outro tipo antes do `auth` → `erro{NAO_AUTENTICADO}` + close 1008 |
 | `listar_impressoras{id}` | `impressoras{id, nomes[], selecionada\|null, extras?}` | — |
 | `selecionar_impressora{id, nome, extras?}` | `selecionar_impressora_ok{id, selecionada, extras?}` | `erro{IMPRESSORA_INDISPONIVEL\|MENSAGEM_INVALIDA}` |
-| `imprimir{id, formato:"pdf", bytesBase64, impressora, gaveta?}` | `imprimir_ok{id, estado:"ACEITO_SPOOLER", avisos?:[GAVETA_FALHOU\|CORTE_FALHOU]}` e depois o push `impressao_estado{id, origem:"push", estado, motivo?, detalhe, encerrado}` | `imprimir_erro{id, codigo: IMPRESSORA_INDISPONIVEL\|ERRO}`; `erro{MENSAGEM_INVALIDA}` (PDF > 2 MiB, base64 inválido…) |
+| `imprimir{id, formato:"pdf", bytesBase64, impressora, gaveta?}` | `imprimir_ok{id, estado:"ACEITO_SPOOLER", avisos?:[GAVETA_FALHOU]}` e depois o push `impressao_estado{id, origem:"push", estado, motivo?, detalhe, encerrado}` (o corte é enviado DEPOIS da resposta, para não atrasá-la: se falhar vai só ao log) | `imprimir_erro{id, codigo: IMPRESSORA_INDISPONIVEL\|ERRO}`; `erro{MENSAGEM_INVALIDA}` (PDF > 2 MiB, base64 inválido…) |
 | `consultar_impressao{id}` (id do job) | `impressao_estado{id, origem:"consulta", …}` | — |
 | `comando{id, comando:"ABRIR_GAVETA"\|"CORTAR"}` | `comando_ok{id}` | `erro{COMANDO_DESABILITADO\|IMPRESSORA_INDISPONIVEL\|ERRO}` |
 
@@ -119,10 +119,12 @@ instaladores para `AgroEase-Agente-Impressao-<versão>-<so>-<arch>.<ext>`, gera 
 a privada só no secret `RELEASE_LATEST_JSON_PRIVKEY` do ambiente `release`; o job confere a assinatura com a pública embutida antes de
 publicar) e publica no GitHub Releases. O backend e os agentes instalados leem o `latest.json` assinado da release mais recente —
 nada a configurar por versão (as variáveis `AGENTE_URL_*`/`AGENTE_SHA256_*` do resumo do job são só um fallback). Uma tag com sufixo
-(`v1.2.3-rc1`) vira **pré-release**: aparece na página de Releases para teste manual, mas não é vista pelo manifesto "latest".
+(`v1.2.3-rc1`) vira **pré-release**: aparece na página de Releases para teste manual, mas não é vista pelo manifesto "latest". Atenção: a
+comparação de versões **ignora o sufixo** (`1.2.3-rc1` = `1.2.3`), então um caixa onde a rc foi instalada à mão **não** se atualiza sozinho
+para a final de mesmo número — instale a final à mão nele, ou publique `1.2.4`.
 A versão do binário é única: `-Drevision=<versão>` → MANIFEST → `hello_ok` → `--app-version` do jpackage; o smoke falha se divergir.
 Manifesto fixo: `…/releases/latest/download/latest.json`.
 
 ## Licença
 
-Código do agente aberto; libs: Apache PDFBox (Apache 2.0), Java-WebSocket (MIT), Jackson (Apache 2.0), JNA (Apache 2.0 / LGPL 2.1, só no Windows).
+Código do agente aberto; libs: Apache PDFBox (Apache 2.0), Java-WebSocket (MIT), Jackson (Apache 2.0), JNA (Apache 2.0 / LGPL 2.1; embarcada em todos os pacotes, usada só no Windows).

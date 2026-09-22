@@ -451,7 +451,13 @@ final class AgenteDesktop implements AcoesUi.Agente {
         if (!at.aplicaSozinho()) {
             return false;
         }
-        if (!at.gerente().podeAplicar(true, Duration.ofDays(1))) { // exige artefato baixado E nenhuma troca em curso
+        if (!at.gerente().podeAplicar(true, Duration.ofDays(1))) { // exige artefato baixado de versão MAIOR e nenhuma troca em curso
+            return false;
+        }
+        if (!at.gerente().anteriorGuardadoOuDispensado()) {
+            // Windows: a guarda do instalador atual (~70 MB) vem DEPOIS do download e pode ter sido interrompida (PC desligado). Aplicar
+            // sem ela deixaria a loja sem rollback; a verificação de 2 min tenta a guarda de novo e o caminho ocioso aplica (adversarial).
+            log.info("Atualização {} baixada, mas sem o instalador da versão atual guardado para reversão: não aplico no boot", at.gerente().versaoDisponivel().orElse("?"));
             return false;
         }
         log.info("Atualização {} já baixada: aplicando no boot, antes de abrir a porta", at.gerente().versaoDisponivel().orElse("?"));

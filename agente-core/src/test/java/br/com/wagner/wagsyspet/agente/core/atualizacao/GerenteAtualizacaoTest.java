@@ -289,6 +289,40 @@ class GerenteAtualizacaoTest {
 
         estado.gravar(EstadoAtualizacao.Estado.VAZIO.comRecusada(new EstadoAtualizacao.Recusada("1.1.0", agora.plus(Duration.ofHours(20)), 1)));
         assertThat(g.resumo()).contains("1.1.0 recusada").contains("1 de " + GerenteAtualizacao.TENTATIVAS_POR_VERSAO + " tentativas").contains("20 h");
+
+        // adversarial: versão publicada aceita mas o DOWNLOAD falhou (proxy/antivírus) → não é "em dia"; e a recusa vigente de uma
+        // versão que já não é a publicada não interessa mais
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comVerificacao(agora.minus(Duration.ofMinutes(5)), null, "1.2.0"));
+        assertThat(g.resumo()).contains("1.2.0 publicada").contains("não baixado").contains("há 5 min").doesNotContain("em dia");
+        assertThat(GerenteAtualizacao.resumo(estado, relogio, "1.2.0")).as("instalada à mão: em dia").contains("em dia");
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comVerificacao(agora, null, "1.2.0")
+                .comRecusada(new EstadoAtualizacao.Recusada("1.1.0", agora.plus(Duration.ofHours(20)), 1)));
+        assertThat(g.resumo()).doesNotContain("recusada").contains("1.2.0 publicada");
+    }
+
+    @Test
+    @DisplayName("instalador baixado que NÃO é maior que a instalada (instalou à mão a mesma versão; reversão falhou) não conta: podeAplicar false, versaoDisponivel vazia, prepararAplicacao recusa e a próxima verificação descarta o arquivo — sem isto o boot aplicava N sobre N")
+    void artefatoQueNaoEMaiorNaoAplica(@TempDir Path tmp) throws Exception {
+        GerenteAtualizacao velho = gerente(tmp, "1.0.0");
+        assertThat(velho.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+        Path arquivo = Path.of(velho.estado().ler().artefatoBaixado().orElseThrow().caminho());
+        assertThat(arquivo).exists();
+
+        GerenteAtualizacao novo = gerente(tmp, "1.1.0"); // o dono instalou a 1.1.0 à mão; o estado.json ainda tem o artefato 1.1.0
+        assertThat(novo.podeAplicar(true, Duration.ofDays(1))).isFalse();
+        assertThat(novo.versaoDisponivel()).isEmpty();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> novo.prepararAplicacao("1.1.0", Optional.empty(), ManifestoRelease.FormatoInstalado.INSTALADOR))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("não é maior");
+        assertThat(novo.verificar()).isEqualTo(GerenteAtualizacao.Situacao.ATUALIZADO);
+        assertThat(novo.estado().ler().artefatoBaixado()).isEmpty();
+        assertThat(arquivo).doesNotExist();
+
+        GerenteAtualizacao maisNovo = gerente(tmp.resolve("b"), "1.0.0");
+        assertThat(maisNovo.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
+        assertThat(maisNovo.podeAplicar(true, Duration.ofDays(1))).as("versão maior continua aplicando").isTrue();
+        assertThat(maisNovo.anteriorGuardadoOuDispensado()).as("sem guarda configurada (Linux/macOS): dispensado").isTrue();
+        maisNovo.guardaAnterior(v -> Optional.empty());
+        assertThat(maisNovo.anteriorGuardadoOuDispensado()).as("guarda configurada e nada guardado").isFalse();
     }
 
     @Test

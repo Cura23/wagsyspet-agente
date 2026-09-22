@@ -69,6 +69,12 @@ public final class GuardaAnterior implements GerenteAtualizacao.GuardaDoAnterior
         return URI.create(s.substring(0, barra) + "/v" + versao + s.substring(barra));
     }
 
+    /** Só o disco (marcador + sha): é o que o gatilho de boot consulta antes de aplicar sem rollback. */
+    @Override
+    public Optional<Path> guardado(String versaoAtual) {
+        return guardado(pasta, versaoAtual);
+    }
+
     /** Instalador da versão atual em {@code anterior/}, baixando se preciso. Vazio = não há como guardar (a atualização segue). */
     @Override
     public synchronized Optional<Path> garantir(String versaoAtual) {

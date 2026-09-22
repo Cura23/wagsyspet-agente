@@ -59,6 +59,11 @@ public final class GerenteAtualizacao {
     @FunctionalInterface
     public interface GuardaDoAnterior {
         Optional<Path> garantir(String versaoAtual);
+
+        /** O instalador da versão atual JÁ guardado e conferido, SEM ir à rede (o gatilho de boot pergunta isto antes de aplicar). */
+        default Optional<Path> guardado(String versaoAtual) {
+            return Optional.empty();
+        }
     }
 
     private final DiretoriosDoAgente dirs;
@@ -97,7 +102,28 @@ public final class GerenteAtualizacao {
     }
 
     public Optional<String> versaoDisponivel() {
-        return estado.ler().artefatoBaixado().map(EstadoAtualizacao.ArtefatoBaixado::versao);
+        return estado.ler().artefatoBaixado().filter(this::artefatoEhMaior).map(EstadoAtualizacao.ArtefatoBaixado::versao);
+    }
+
+    /**
+     * Um instalador baixado só vale se for de versão MAIOR que a instalada. Não é redundante com a avaliação do manifesto: o artefato
+     * sobrevive no estado a uma instalação à mão da mesma versão e ao ramo "reversão falhou" do atualizador — sem isto o boot (D4)
+     * aplicaria N sobre N, e o atualizador trataria o plano N→N como reversão (adversarial das lacunas F6).
+     */
+    private boolean artefatoEhMaior(EstadoAtualizacao.ArtefatoBaixado b) {
+        try {
+            return VersaoSemantica.comparar(b.versao(), verificador.versaoAtual()) > 0;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /**
+     * {@code false} só quando há guarda configurada (Windows/MSI) e o instalador da versão atual ainda NÃO está guardado e conferido:
+     * aplicar assim ficaria sem rollback. Só consulta o disco — nunca baixa (é o que o boot pode pagar).
+     */
+    public boolean anteriorGuardadoOuDispensado() {
+        return guarda.map(g -> g.guardado(verificador.versaoAtual()).isPresent()).orElse(true);
     }
 
     public Optional<EstadoAtualizacao.EmAplicacao> emAplicacao() {
@@ -126,6 +152,12 @@ public final class GerenteAtualizacao {
         EstadoAtualizacao.Estado e = estado.ler();
         if (e.emAplicacao().isPresent()) {
             return e.artefatoBaixado().isPresent() ? Situacao.DISPONIVEL_BAIXADO : Situacao.ATUALIZADO; // troca em curso: não mexer
+        }
+        if (e.artefatoBaixado().filter(b -> !artefatoEhMaior(b)).isPresent()) {
+            // sobra de uma instalação à mão da mesma versão (ou de uma reversão que falhou): não é mais uma atualização
+            log.info("Instalador {} baixado não é maior que a versão instalada ({}): descartado", e.artefatoBaixado().get().versao(), verificador.versaoAtual());
+            e = limparBaixado(e);
+            gravar(e);
         }
         Instant agora = relogio.instant();
         Optional<ClienteRelease.ManifestoBaixado> baixado;
@@ -240,9 +272,10 @@ public final class GerenteAtualizacao {
         }
     }
 
-    /** Pode aplicar agora? Instalador baixado E (ocioso há pelo menos {@link #OCIOSIDADE_MINIMA}). */
+    /** Pode aplicar agora? Instalador baixado de versão MAIOR, nenhuma troca em curso E ocioso há pelo menos {@link #OCIOSIDADE_MINIMA}. */
     public boolean podeAplicar(boolean ocioso, Duration ociosoHa) {
-        return estado.ler().artefatoBaixado().isPresent() && estado.ler().emAplicacao().isEmpty()
+        EstadoAtualizacao.Estado e = estado.ler();
+        return e.artefatoBaixado().filter(this::artefatoEhMaior).isPresent() && e.emAplicacao().isEmpty()
                 && ocioso && ociosoHa.compareTo(ociosidadeMinima) >= 0;
     }
 
@@ -254,6 +287,10 @@ public final class GerenteAtualizacao {
     public synchronized Path prepararAplicacao(String versaoAtual, Optional<Path> launcherAtual, ManifestoRelease.FormatoInstalado formato, PlanoAtualizacao.Gatilho gatilho) throws IOException {
         EstadoAtualizacao.Estado e = estado.ler();
         EstadoAtualizacao.ArtefatoBaixado b = e.artefatoBaixado().orElseThrow(() -> new IllegalStateException("nada baixado para aplicar"));
+        if (!artefatoEhMaior(b)) {
+            gravar(limparBaixado(e));
+            throw new IllegalStateException("instalador baixado (" + b.versao() + ") não é maior que a versão instalada (" + versaoAtual + "); descartado");
+        }
         if (!shaConfere(Path.of(b.caminho()), b.sha256())) {
             gravar(limparBaixado(e));
             throw new IOException("instalador baixado não confere mais com o sha256 (" + b.caminho() + "); descartado");
@@ -373,18 +410,28 @@ public final class GerenteAtualizacao {
             return "aplicando " + ap.versaoNova() + " (boot " + e.tentativasBoot() + " de " + BOOTS_ATE_REVERTER + ", anterior " + ap.versaoAnterior() + ")";
         }
         if (e.artefatoBaixado().isPresent()) {
-            return "versão " + e.artefatoBaixado().get().versao() + " baixada, aguardando o caixa ficar ocioso, o próximo boot ou o clique em \"Atualizar\"";
+            return "versão " + e.artefatoBaixado().get().versao() + " baixada: aplica quando o caixa ficar ocioso, no próximo boot ou pelo clique em \"Atualizar\""
+                    + " (instalação .deb: só pelo clique)";
         }
         Optional<String> esgotada = esgotada(e, versaoAtual);
         if (esgotada.isPresent()) {
             return "versão " + esgotada.get() + " não instalou aqui (" + e.recusada().get().tentativas()
                     + " tentativas): não tento mais — instale manualmente ou aguarde a próxima versão";
         }
-        Optional<EstadoAtualizacao.Recusada> vigente = e.recusada().filter(r -> r.ate().isAfter(agora)).filter(r -> instaladaMenorQue(versaoAtual, r.versao()));
+        // recusa vigente só interessa se ainda é a versão publicada (saiu uma maior, a história é outra) e maior que a instalada
+        Optional<EstadoAtualizacao.Recusada> vigente = e.recusada().filter(r -> r.ate().isAfter(agora))
+                .filter(r -> e.versaoDisponivel().map(v -> VersaoSemantica.comparar(v, r.versao()) == 0).orElse(true))
+                .filter(r -> instaladaMenorQue(versaoAtual, r.versao()));
         if (vigente.isPresent()) {
             EstadoAtualizacao.Recusada r = vigente.get();
             return "versão " + r.versao() + " recusada por mais " + haQuanto(Duration.between(agora, r.ate())) + " (" + r.tentativas() + " de "
                     + TENTATIVAS_POR_VERSAO + " tentativas)";
+        }
+        // versão publicada aceita mas sem instalador (download falhou: proxy/antivírus) — "em dia" aqui esconderia o problema do suporte
+        Optional<String> pendente = e.versaoDisponivel().filter(v -> instaladaMenorQue(versaoAtual, v));
+        if (pendente.isPresent()) {
+            return "versão " + pendente.get() + " publicada, instalador ainda não baixado (nova tentativa na próxima verificação; última resposta da release há "
+                    + e.ultimaVerificacao().map(v -> haQuanto(Duration.between(v, agora))).orElse("?") + ")";
         }
         // ultimaVerificacao = última RESPOSTA da release (INDISPONIVEL não grava): sem internet, "há 10 dias" é o sintoma certo
         return e.ultimaVerificacao()

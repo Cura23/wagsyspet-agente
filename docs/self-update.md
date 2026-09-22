@@ -26,13 +26,16 @@ No Linux o agente descobre o formato pelo lugar do executável: dentro do HOME =
 2. **Assinatura antes de tudo**: o `latest.json` só é lido depois de a assinatura Ed25519 conferir com a chave de release
    embutida no agente (chave atual ou a **reserva**, identificada pelo `kid`). Assinatura errada = manifesto ignorado.
 3. **Versão estritamente maior** que a instalada, com artefato para este sistema/formato; senão, "nenhuma versão nova"
-   (fica no log).
+   (fica no log). A comparação usa só os três números: o sufixo de pré-release é ignorado (`1.2.3-rc1` = `1.2.3`), então um
+   caixa onde a rc foi instalada à mão não se atualiza sozinho para a final de mesmo número.
 4. **Download** do instalador para `<pasta de dados>/atualizacao/baixado/`, em streaming, com teto de tamanho e
    conferência do SHA-256 do manifesto. Baixado uma vez só.
 5. **Windows**: antes de aplicar, guarda o instalador da versão **atual** em `atualizacao/anterior/` (é o que permite reverter).
 6. **Quando aplica**: (a) caixa **ocioso** há 5 min (nenhuma sessão do PDV autenticada, fila vazia); (b) **no boot**, se o
-   instalador já estava baixado de uma sessão anterior — a troca acontece na abertura, antes de a porta abrir; (c) clique em
-   **"Atualizar"** na janela/bandeja. O `.deb` só pelo clique.
+   instalador já estava baixado de uma sessão anterior — a troca acontece na abertura, antes de a porta abrir (no Windows, só se
+   o instalador da versão atual já está guardado para a reversão; senão fica para o caminho ocioso, que retenta a guarda); (c)
+   clique em **"Atualizar"** na janela/bandeja. O `.deb` só pelo clique. Um instalador baixado que não seja de versão maior que
+   a instalada (por exemplo, a mesma versão instalada à mão nesse meio-tempo) é descartado, nunca aplicado.
 7. **Saída controlada**: fecha as conexões do PDV com `1001 ATUALIZANDO` (o PWA mostra "volta em até 1 minuto"), grava
    `atualizacao/plano.json` (versões, instalador, sha256, formato, launcher), pausa o supervisor do Windows (a tarefa
    keepalive não pode reabrir o agente velho no meio da instalação), lança o atualizador e sai com código 0.

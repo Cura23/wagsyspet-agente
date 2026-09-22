@@ -386,6 +386,8 @@ class AgenteDesktopAtualizacaoTest {
             @Override public void flush() { }
             @Override public void close() { }
         };
+        java.util.logging.Level nivelAntes = jul.getLevel();
+        jul.setLevel(java.util.logging.Level.INFO); // não depender do nível herdado do raiz (outra classe pode tê-lo deixado em WARNING)
         jul.addHandler(handler);
         try {
             // esta JVM "é" a 9.9.9 = a publicada: nada a baixar
@@ -396,6 +398,7 @@ class AgenteDesktopAtualizacaoTest {
             });
         } finally {
             jul.removeHandler(handler);
+            jul.setLevel(nivelAntes);
         }
     }
 
@@ -413,18 +416,16 @@ class AgenteDesktopAtualizacaoTest {
     void aplicaNoBootAntesDeAbrirAPorta(@TempDir Path tmp) throws Exception {
         DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
         parear(dirs);
-        int porta = portaLivre();
-        AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{porta}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE,
+        ByteArrayOutputStream saida = new ByteArrayOutputStream();
+        AgenteDesktop d = new AgenteDesktop(dirs, "1.0.0-teste", new int[]{portaLivre()}, new PrintStream(saida, true, StandardCharsets.UTF_8), IMPRESSAO_FAKE,
                 Optional.of(comInstaladorBaixado(dirs, "1.0.0-teste")));
         java.util.concurrent.atomic.AtomicInteger pausas = new java.util.concurrent.atomic.AtomicInteger();
         java.util.concurrent.atomic.AtomicInteger retomadas = new java.util.concurrent.atomic.AtomicInteger();
         d.supervisor(pausas::incrementAndGet, retomadas::incrementAndGet);
         CompletableFuture<Integer> codigo = executar(d);
         assertThat(codigo.get(10, TimeUnit.SECONDS)).as("saiu para o atualizador aplicar").isEqualTo(AgenteDesktop.SAIDA_OK);
-        assertThat(d.porta()).as("a porta nunca abriu").isNull();
-        try (ServerSocket livre = new ServerSocket(porta, 1, java.net.InetAddress.getLoopbackAddress())) {
-            assertThat(livre.isBound()).isTrue();
-        }
+        // "pronto em ws://" só é impresso por subir(): é a prova de que a porta NUNCA abriu (porta()==null vale para qualquer saída — adversarial)
+        assertThat(saida.toString(StandardCharsets.UTF_8)).doesNotContain("pronto em ws://").contains("Atualizando o agente");
         assertThat(planoLancado.get()).isNotNull();
         PlanoAtualizacao plano = PlanoAtualizacao.ler(planoLancado.get());
         assertThat(plano.versaoNova()).isEqualTo("9.9.9");
@@ -469,6 +470,58 @@ class AgenteDesktopAtualizacaoTest {
         assertThat(assistido.atualizacaoDisponivel()).as("o download continua esperando o clique").contains("9.9.9");
         assistido.sair();
         assertThat(codigo2.get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
+    }
+
+    @Test
+    @DisplayName("Windows: com guarda configurada e o instalador da versão ATUAL ainda não guardado, o boot NÃO aplica (ficaria sem rollback; a verificação de 2 min retenta a guarda e o caminho ocioso aplica); guardado → aplica")
+    void bootNaoAplicaSemInstaladorAnteriorGuardado(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente semGuarda = new DiretoriosDoAgente(tmp.resolve("sem"));
+        parear(semGuarda);
+        AgenteDesktop.Atualizacao at = comInstaladorBaixado(semGuarda, "1.0.0-teste");
+        at.gerente().guardaAnterior(v -> Optional.empty()); // guarda que nunca conseguiu baixar (rede/404) — guardado() default = vazio
+        AgenteDesktop d = new AgenteDesktop(semGuarda, "1.0.0-teste", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE, Optional.of(at));
+        CompletableFuture<Integer> codigo = executar(d);
+        assertThat(d.pareado()).as("subiu normal").isTrue();
+        assertThat(planoLancado.get()).isNull();
+        assertThat(d.atualizacaoDisponivel()).as("o download fica esperando").contains("9.9.9");
+        d.sair();
+        assertThat(codigo.get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
+
+        DiretoriosDoAgente comGuarda = new DiretoriosDoAgente(tmp.resolve("com"));
+        parear(comGuarda);
+        AgenteDesktop.Atualizacao at2 = comInstaladorBaixado(comGuarda, "1.0.0-teste");
+        Path exeGuardado = tmp.resolve("anterior.exe");
+        at2.gerente().guardaAnterior(new GerenteAtualizacao.GuardaDoAnterior() {
+            @Override public Optional<Path> garantir(String v) { return Optional.of(exeGuardado); }
+            @Override public Optional<Path> guardado(String v) { return Optional.of(exeGuardado); }
+        });
+        AgenteDesktop d2 = new AgenteDesktop(comGuarda, "1.0.0-teste", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE, Optional.of(at2));
+        assertThat(executar(d2).get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
+        assertThat(planoLancado.get()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("instalador baixado da MESMA versão que está rodando (instalou à mão; ou a reversão falhou e o atualizador esqueceu a troca) → o boot NÃO reaplica e o artefato é descartado na próxima verificação")
+    void bootNaoReaplicaAMesmaVersao(@TempDir Path tmp) throws Exception {
+        DiretoriosDoAgente dirs = new DiretoriosDoAgente(tmp);
+        parear(dirs);
+        Path baixado = dirs.atualizacao().resolve("baixado").resolve("i.bin");
+        java.nio.file.Files.createDirectories(baixado.getParent());
+        java.nio.file.Files.write(baixado, instalador);
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(instalador));
+        EstadoAtualizacao estado = new EstadoAtualizacao(dirs.atualizacao().resolve("estado.json"));
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comArtefatoBaixado(new EstadoAtualizacao.ArtefatoBaixado("9.9.9", baixado.toString(), sha)));
+        AgenteDesktop.Atualizacao at = atualizacao(dirs, "9.9.9", Duration.ofHours(1)); // esta JVM JÁ É a 9.9.9
+        AgenteDesktop d = new AgenteDesktop(dirs, "9.9.9", new int[]{portaLivre()}, new PrintStream(new ByteArrayOutputStream()), IMPRESSAO_FAKE, Optional.of(at));
+        CompletableFuture<Integer> codigo = executar(d);
+        assertThat(d.pareado()).as("subiu normal, sem sair para o atualizador").isTrue();
+        assertThat(planoLancado.get()).isNull();
+        assertThat(d.atualizacaoDisponivel()).as("a UI não oferece 'Atualizar' para a mesma versão").isEmpty();
+        assertThat(at.gerente().verificar()).isEqualTo(GerenteAtualizacao.Situacao.ATUALIZADO);
+        assertThat(estado.ler().artefatoBaixado()).as("sobra descartada").isEmpty();
+        assertThat(baixado).doesNotExist();
+        d.sair();
+        assertThat(codigo.get(10, TimeUnit.SECONDS)).isEqualTo(AgenteDesktop.SAIDA_OK);
     }
 
     @Test
