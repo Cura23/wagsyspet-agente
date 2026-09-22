@@ -45,6 +45,11 @@ class ReversorMsiDeForaTest {
         assertThat(p.versaoNova()).isEqualTo("1.0.0");
         assertThat(p.versaoAnterior()).isEqualTo("9.9.9");
         assertThat(Path.of(p.artefato())).isEqualTo(exe);
+        // Fecho F6: o sha do guardado vai no plano — entre gravar o plano e o msiexec há a saída do agente e a espera da trava, e o
+        // atualizador de fora reconfere o arquivo antes de executar (AplicadorAtualizacao.artefatoConfere); sha vazio = sem reconferência
+        assertThat(p.sha256()).as("sha256 real do .exe guardado, não vazio")
+                .isEqualTo(java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest("old".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        assertThat(GerenteAtualizacao.shaConfere(Path.of(p.artefato()), p.sha256())).isTrue();
         assertThat(p.formato()).isEqualTo(ManifestoRelease.FormatoInstalado.INSTALADOR);
         assertThat(p.gatilho()).isEqualTo(PlanoAtualizacao.Gatilho.AUTO);
         assertThat(p.launcherAtual().map(Path::of)).contains(launcher);

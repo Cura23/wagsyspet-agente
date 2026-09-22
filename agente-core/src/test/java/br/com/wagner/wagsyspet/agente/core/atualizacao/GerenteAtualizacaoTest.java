@@ -256,9 +256,39 @@ class GerenteAtualizacaoTest {
         assertThat(g.esgotada()).contains("1.1.0");
         assertThat(GerenteAtualizacao.resumo(g.estado(), relogio)).contains("1.1.0").contains("3 tentativas");
 
+        // lacuna 2 (recon): a recusa nunca é limpa — instalada a 1.1.0 À MÃO, o --status/--diagnostico continuavam dizendo
+        // "não instalou aqui" para sempre. A versão esgotada só conta enquanto a instalada é MENOR que ela.
+        assertThat(GerenteAtualizacao.resumo(g.estado(), relogio, "1.0.0")).as("ainda na 1.0.0: a mensagem vale").contains("não instalou");
+        assertThat(GerenteAtualizacao.resumo(g.estado(), relogio, "1.1.0")).as("instalada à mão: a mensagem some").doesNotContain("não instalou");
+        assertThat(gerente(tmp, "1.1.0").esgotada()).as("o gerente da 1.1.0 não se acha esgotado").isEmpty();
+        assertThat(gerente(tmp, "1.0.0").esgotada()).contains("1.1.0");
+
         publicar("1.2.0"); // o dono publicou a correção: versão MAIOR é outra história
         assertThat(g.verificar()).isEqualTo(GerenteAtualizacao.Situacao.DISPONIVEL_BAIXADO);
         assertThat(g.esgotada()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("resumo() para --status/--diagnostico é para gente: 'há quanto tempo' em vez de ISO cru, 'boot N de 3', 'N de 3 tentativas', e o caso 'ainda não verificada' explica quando a consulta acontece")
+    void resumoHumanizado(@TempDir Path tmp) throws Exception {
+        GerenteAtualizacao g = gerente(tmp, "1.0.0");
+        EstadoAtualizacao estado = g.estado();
+        assertThat(g.resumo()).contains("ainda não verificada").contains("2 min").contains("6 h");
+
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comVerificacao(agora.minus(Duration.ofHours(3)), null, null));
+        assertThat(g.resumo()).contains("em dia").contains("há 3 h").contains("2026-09-10T09:00:00Z");
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comVerificacao(agora.minus(Duration.ofMinutes(14)), null, null));
+        assertThat(g.resumo()).contains("há 14 min");
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comVerificacao(agora.minus(Duration.ofDays(3)), null, null));
+        assertThat(g.resumo()).contains("há 3 dias");
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comVerificacao(agora.plus(Duration.ofMinutes(5)), null, null)); // relógio ajustado para trás
+        assertThat(g.resumo()).contains("menos de 1 min").doesNotContain("há -");
+
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comEmAplicacao(new EstadoAtualizacao.EmAplicacao("1.1.0", "1.0.0", null, agora), 1));
+        assertThat(g.resumo()).contains("aplicando 1.1.0").contains("boot 1 de " + GerenteAtualizacao.BOOTS_ATE_REVERTER).contains("anterior 1.0.0");
+
+        estado.gravar(EstadoAtualizacao.Estado.VAZIO.comRecusada(new EstadoAtualizacao.Recusada("1.1.0", agora.plus(Duration.ofHours(20)), 1)));
+        assertThat(g.resumo()).contains("1.1.0 recusada").contains("1 de " + GerenteAtualizacao.TENTATIVAS_POR_VERSAO + " tentativas").contains("20 h");
     }
 
     @Test

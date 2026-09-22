@@ -139,6 +139,7 @@ public final class GerenteAtualizacao {
             return Situacao.INDISPONIVEL;
         }
         if (baixado.isEmpty()) { // 304: nada mudou desde a última vez e o instalador já está baixado
+            log.info("Verificação de atualização: release sem mudança; {} continua baixada, aguardando o caixa ficar ocioso", e.versaoDisponivel().orElse("?"));
             gravar(e.comVerificacao(agora, etagConhecido, e.versaoDisponivel().orElse(null)));
             return Situacao.DISPONIVEL_BAIXADO;
         }
@@ -151,6 +152,10 @@ public final class GerenteAtualizacao {
                 return Situacao.RECUSADO;
             }
             case ATUALIZADA -> {
+                // a verificação que NÃO acha nada era muda (só o estado.json mudava): o suporte não tinha como saber se o zelador
+                // estava vivo. 4 linhas/dia contra 1 MB × 5 arquivos de log — cabe.
+                log.info("Verificação de atualização: nenhuma versão nova (publicada {}, instalada {})",
+                        a.manifesto().map(ManifestoRelease::versao).orElse("?"), verificador.versaoAtual());
                 gravar(limparBaixado(e).comVerificacao(agora, etag, null));
                 return Situacao.ATUALIZADO;
             }
@@ -183,6 +188,8 @@ public final class GerenteAtualizacao {
             }
             e = limparBaixado(e).comArtefatoBaixado(new EstadoAtualizacao.ArtefatoBaixado(m.versao(), destino.toString(), art.sha256()));
             log.info("Atualização {} pronta para aplicar quando o caixa estiver ocioso ({})", m.versao(), destino.getFileName());
+        } else {
+            log.debug("Verificação de atualização: {} já baixada e íntegra", m.versao());
         }
         gravar(e.comVerificacao(agora, etag, m.versao()));
         return Situacao.DISPONIVEL_BAIXADO;
@@ -207,14 +214,30 @@ public final class GerenteAtualizacao {
 
     /** A versão que esgotou as {@link #TENTATIVAS_POR_VERSAO} nesta máquina (a UI avisa que ela precisa ser instalada à mão). */
     public Optional<String> esgotada() {
-        return esgotada(estado.ler());
+        return esgotada(estado.ler(), verificador.versaoAtual());
     }
 
-    /** Só vale enquanto a versão esgotada ainda é a PUBLICADA: saiu uma maior, a história é outra. */
-    private static Optional<String> esgotada(EstadoAtualizacao.Estado e) {
+    /**
+     * Só vale enquanto a versão esgotada ainda é a PUBLICADA (saiu uma maior, a história é outra) E a instalada é MENOR que ela: a
+     * recusa nunca é limpa do estado, então depois de instalar a versão à mão o {@code --status}/{@code --diagnostico} diriam "não
+     * instalou aqui" para sempre. {@code versaoAtual} nula ou inválida = não filtra.
+     */
+    private static Optional<String> esgotada(EstadoAtualizacao.Estado e, String versaoAtual) {
         return e.recusada().filter(r -> r.tentativas() >= TENTATIVAS_POR_VERSAO)
                 .filter(r -> e.versaoDisponivel().map(v -> VersaoSemantica.comparar(v, r.versao()) == 0).orElse(true))
+                .filter(r -> instaladaMenorQue(versaoAtual, r.versao()))
                 .map(EstadoAtualizacao.Recusada::versao);
+    }
+
+    private static boolean instaladaMenorQue(String versaoAtual, String versao) {
+        if (versaoAtual == null) {
+            return true;
+        }
+        try {
+            return VersaoSemantica.comparar(versaoAtual, versao) < 0;
+        } catch (IllegalArgumentException ex) {
+            return true;
+        }
     }
 
     /** Pode aplicar agora? Instalador baixado E (ocioso há pelo menos {@link #OCIOSIDADE_MINIMA}). */
@@ -336,27 +359,55 @@ public final class GerenteAtualizacao {
         }
     }
 
-    /** Uma linha para {@code --status} a partir só do {@code estado.json}. */
+    /** Uma linha para {@code --status}/{@code --diagnostico} a partir só do {@code estado.json}; sem a versão instalada não filtra a esgotada. */
     public static String resumo(EstadoAtualizacao estado, Clock relogio) {
+        return resumo(estado, relogio, null);
+    }
+
+    /** Para gente (suporte lendo a saída do lojista): "há quanto tempo" em vez de ISO cru, "boot N de 3", "N de 3 tentativas". */
+    public static String resumo(EstadoAtualizacao estado, Clock relogio, String versaoAtual) {
         EstadoAtualizacao.Estado e = estado.ler();
+        Instant agora = relogio.instant();
         if (e.emAplicacao().isPresent()) {
-            return "aplicando " + e.emAplicacao().get().versaoNova() + " (boot " + e.tentativasBoot() + ")";
+            EstadoAtualizacao.EmAplicacao ap = e.emAplicacao().get();
+            return "aplicando " + ap.versaoNova() + " (boot " + e.tentativasBoot() + " de " + BOOTS_ATE_REVERTER + ", anterior " + ap.versaoAnterior() + ")";
         }
         if (e.artefatoBaixado().isPresent()) {
-            return "versão " + e.artefatoBaixado().get().versao() + " baixada, aguardando o caixa ficar ocioso";
+            return "versão " + e.artefatoBaixado().get().versao() + " baixada, aguardando o caixa ficar ocioso, o próximo boot ou o clique em \"Atualizar\"";
         }
-        if (esgotada(e).isPresent()) {
-            return "versão " + e.recusada().get().versao() + " não instalou aqui (" + e.recusada().get().tentativas()
+        Optional<String> esgotada = esgotada(e, versaoAtual);
+        if (esgotada.isPresent()) {
+            return "versão " + esgotada.get() + " não instalou aqui (" + e.recusada().get().tentativas()
                     + " tentativas): não tento mais — instale manualmente ou aguarde a próxima versão";
         }
-        if (e.recusada().filter(r -> r.ate().isAfter(relogio.instant())).isPresent()) {
-            return "versão " + e.recusada().get().versao() + " recusada até " + e.recusada().get().ate();
+        Optional<EstadoAtualizacao.Recusada> vigente = e.recusada().filter(r -> r.ate().isAfter(agora)).filter(r -> instaladaMenorQue(versaoAtual, r.versao()));
+        if (vigente.isPresent()) {
+            EstadoAtualizacao.Recusada r = vigente.get();
+            return "versão " + r.versao() + " recusada por mais " + haQuanto(Duration.between(agora, r.ate())) + " (" + r.tentativas() + " de "
+                    + TENTATIVAS_POR_VERSAO + " tentativas)";
         }
-        return e.ultimaVerificacao().map(v -> "em dia (verificado em " + v + ")").orElse("ainda não verificado");
+        // ultimaVerificacao = última RESPOSTA da release (INDISPONIVEL não grava): sem internet, "há 10 dias" é o sintoma certo
+        return e.ultimaVerificacao()
+                .map(v -> "em dia — última resposta da release há " + haQuanto(Duration.between(v, agora)) + " (" + v + ")")
+                .orElse("ainda não verificada (consulta " + VERIFICACAO_INICIAL.toMinutes() + " min depois de abrir e a cada " + INTERVALO_VERIFICACAO.toHours() + " h)");
+    }
+
+    /** "menos de 1 min" / "14 min" / "3 h" / "3 dias"; nunca negativo (relógio ajustado para trás). */
+    static String haQuanto(Duration d) {
+        if (d.isNegative() || d.toMinutes() < 1) {
+            return "menos de 1 min";
+        }
+        if (d.toHours() < 1) {
+            return d.toMinutes() + " min";
+        }
+        if (d.toHours() < 48) {
+            return d.toHours() + " h";
+        }
+        return d.toDays() + " dias";
     }
 
     public String resumo() {
-        return resumo(estado, relogio);
+        return resumo(estado, relogio, verificador.versaoAtual());
     }
 
     private void gravar(EstadoAtualizacao.Estado e) {

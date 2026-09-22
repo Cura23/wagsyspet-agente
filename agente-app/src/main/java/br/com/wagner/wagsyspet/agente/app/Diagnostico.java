@@ -32,7 +32,21 @@ final class Diagnostico {
     private Diagnostico() {
     }
 
-    static boolean rodar(PrintStream out, DiretoriosDoAgente dirs, String linhaVersao) {
+    /**
+     * A linha da atualização automática SÓ LÊ o {@code estado.json} (nunca cria a pasta nem consulta o manifesto — o diagnóstico não
+     * pode baixar 70 MB nem gravar estado); ilegível não derruba o diagnóstico (mesmo tratamento do pareamento).
+     */
+    static String linhaAtualizacao(DiretoriosDoAgente dirs, Clock relogio, String versao) {
+        try {
+            return br.com.wagner.wagsyspet.agente.core.atualizacao.GerenteAtualizacao.resumo(
+                    new br.com.wagner.wagsyspet.agente.core.atualizacao.EstadoAtualizacao(dirs.atualizacao().resolve(
+                            br.com.wagner.wagsyspet.agente.core.atualizacao.GerenteAtualizacao.ARQUIVO_ESTADO)), relogio, versao);
+        } catch (RuntimeException e) {
+            return "ilegível (" + e + ")";
+        }
+    }
+
+    static boolean rodar(PrintStream out, DiretoriosDoAgente dirs, String linhaVersao, String versao) {
         boolean ok = true;
         out.println(linhaVersao);
         out.println("Heap máximo: " + (Runtime.getRuntime().maxMemory() / (1024 * 1024)) + " MB");
@@ -86,6 +100,7 @@ final class Diagnostico {
         }
         out.println("INFO  portas 127.0.0.1: " + portas.toString().trim());
         out.println("INFO  iniciar com o sistema: " + ComandosAutostart.padrao(dirs, out, out).linhaStatus());
+        out.println("INFO  atualização automática: " + linhaAtualizacao(dirs, Clock.systemUTC(), versao));
         out.println("INFO  estado do cupom no spooler: " + br.com.wagner.wagsyspet.agente.impressao.spooler.AcompanhamentoWindows.diagnostico());
         out.println("INFO  relógio × servidor: " + relogioContraServidor());
 
