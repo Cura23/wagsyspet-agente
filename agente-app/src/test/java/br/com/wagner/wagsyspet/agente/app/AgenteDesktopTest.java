@@ -332,6 +332,9 @@ class AgenteDesktopTest {
             assertThat(Main.executar(new String[]{"--instalar", "--dir-dados", tmp.toString()}, pout, perr)).isEqualTo(2);
         } finally {
             System.clearProperty("agente.versao");
+            // os comandos de linha deixam o logger raiz em WARNING (LogDoAgente.soConsole): sem o reset, a classe seguinte na MESMA JVM
+            // não vê INFO nenhum — o teste do log da verificação falhava conforme a ordem das classes (adversarial das lacunas F6)
+            java.util.logging.LogManager.getLogManager().reset();
         }
     }
 }

@@ -187,6 +187,14 @@ final class AgenteDesktop implements AcoesUi.Agente {
                 case AGUARDAR_CONFIRMACAO -> aguardarConfirmacao = true;
                 default -> { }
             }
+            // D4, 2º gatilho: instalador já baixado (numa sessão anterior o caixa não ficou ocioso, ou desligaram o PC) → aplica AGORA,
+            // antes de abrir a porta — a troca acontece na abertura, com o PC ficando ligado, em vez de sumir 1 min no meio do expediente.
+            // Nunca sob a sentinela (1º boot da versão nova / binário velho relançado no meio): reaplicar aqui seria o loop de boot.
+            if (!aguardarConfirmacao && aplicarNoBoot(atualizacao.get())) {
+                int codigo = encerramento.join();
+                zelador.shutdownNow();
+                return codigo;
+            }
         }
         Optional<Pareamento> p = cofre.ler();
         cofreVistoEm = mtimeCofre();
@@ -431,6 +439,30 @@ final class AgenteDesktop implements AcoesUi.Agente {
                 log.warn("Verificação de atualização falhou: {}", e.toString());
             }
         });
+    }
+
+    /**
+     * Gatilho de BOOT (D4): só o que JÁ está baixado e íntegro — nunca consulta o manifesto nem baixa nada aqui (o caixa abre o PDV
+     * logo depois de ligar; verificar/baixar/guardar ficam para os 2 min da verificação inicial). Instalador assistido (.deb) não
+     * sai sozinho: o pkexec pediria a senha a ninguém. {@code true} = o agente já está saindo para o atualizador; {@code false} =
+     * segue e abre a porta (inclusive quando o lançador falhou: {@code aplicarAtualizacao} já registrou a recusa e retomou o supervisor).
+     */
+    private boolean aplicarNoBoot(Atualizacao at) {
+        if (!at.aplicaSozinho()) {
+            return false;
+        }
+        if (!at.gerente().podeAplicar(true, Duration.ofDays(1))) { // exige artefato baixado de versão MAIOR e nenhuma troca em curso
+            return false;
+        }
+        if (!at.gerente().anteriorGuardadoOuDispensado()) {
+            // Windows: a guarda do instalador atual (~70 MB) vem DEPOIS do download e pode ter sido interrompida (PC desligado). Aplicar
+            // sem ela deixaria a loja sem rollback; a verificação de 2 min tenta a guarda de novo e o caminho ocioso aplica (adversarial).
+            log.info("Atualização {} baixada, mas sem o instalador da versão atual guardado para reversão: não aplico no boot", at.gerente().versaoDisponivel().orElse("?"));
+            return false;
+        }
+        log.info("Atualização {} já baixada: aplicando no boot, antes de abrir a porta", at.gerente().versaoDisponivel().orElse("?"));
+        aplicarAtualizacao("boot");
+        return encerramento.isDone();
     }
 
     /** A cada intervalo: se há versão baixada e o caixa está ocioso há tempo suficiente, aplica. */

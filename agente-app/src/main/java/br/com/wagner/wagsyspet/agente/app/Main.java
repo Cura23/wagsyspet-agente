@@ -88,7 +88,7 @@ public final class Main {
                 return 0;
             }
             case DIAGNOSTICO -> {
-                return Diagnostico.rodar(out, dirs, linhaVersao()) ? 0 : SAIDA_FALHA;
+                return Diagnostico.rodar(out, dirs, linhaVersao(), versao()) ? 0 : SAIDA_FALHA;
             }
             case STATUS -> {
                 out.println(linhaVersao());
