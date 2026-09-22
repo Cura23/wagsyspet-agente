@@ -9,6 +9,11 @@ on:
   pull_request:
     paths-ignore: ['**.md', 'docs/**']
   workflow_dispatch:
+    inputs:
+      matriz:
+        description: 'JSON da matriz de runners (vazio = ubuntu/windows/macos-latest; ex.: {"os":["macos-15-intel"]} para provar o runner Intel sem publicar)'
+        type: string
+        default: ''
   workflow_call:
     inputs:
       revision:
@@ -293,6 +298,14 @@ jobs:
         run: |
           set -euo pipefail
           DIST=agente-app/target/dist; NOME=AgroEase-Agente-Impressao
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # o openssl do sistema é LibreSSL, sem o -rawin do Ed25519 (a release v1.1.0 caiu aqui no macos-15-intel; no arm64 o do
+            # Homebrew já vinha primeiro no PATH). O OpenSSL 3 do Homebrew é keg-only: entra no PATH à mão, e instala se faltar.
+            OSSL="$(brew --prefix openssl@3 2>/dev/null || true)"
+            [ -x "$OSSL/bin/openssl" ] || { brew install --quiet openssl@3 >/dev/null; OSSL="$(brew --prefix openssl@3)"; }
+            export PATH="$OSSL/bin:$PATH"
+          fi
+          openssl version
           # Windows: RUNNER_TEMP vem como D:\a\_temp — bash/openssl/python querem POSIX (/d/a/_temp), a JVM quer Windows (D:\…)
           if [ "$RUNNER_OS" = "Windows" ]; then SMK="$(cygpath -u "$RUNNER_TEMP")/f6"; SMK_JVM="$(cygpath -w "$RUNNER_TEMP")\\f6"; else SMK="$RUNNER_TEMP/f6"; SMK_JVM="$SMK"; fi
           rm -rf "$SMK"; mkdir -p "$SMK/home/.local/share/agroease/agente-impressao" "$SMK/dados" "$SMK/art" "$SMK/apps"
